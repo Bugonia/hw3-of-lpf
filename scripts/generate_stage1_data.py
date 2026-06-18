@@ -9,6 +9,7 @@ points, the ground-truth numpy expression, and an assistant tool-call answer.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -477,6 +478,34 @@ def choose_template(
     return rng.choice(templates)
 
 
+def build_template_schedule(
+    templates: list[Template],
+    rng: random.Random,
+    num_samples: int,
+    samples_per_template: int | None,
+    forced_template_ids: list[str] | None,
+) -> list[Template]:
+    if forced_template_ids:
+        unknown = sorted(set(forced_template_ids) - {t.template_id for t in templates})
+        if unknown:
+            raise ValueError(f"unknown template ids: {unknown}")
+        templates = [t for t in templates if t.template_id in set(forced_template_ids)]
+
+    if samples_per_template is not None:
+        schedule = [template for template in templates for _ in range(samples_per_template)]
+    else:
+        if num_samples < 1:
+            raise ValueError("--num-samples must be positive")
+        base, extra = divmod(num_samples, len(templates))
+        schedule = []
+        for idx, template in enumerate(templates):
+            count = base + (1 if idx < extra else 0)
+            schedule.extend([template] * count)
+
+    rng.shuffle(schedule)
+    return schedule
+
+
 def make_sample(
     template: Template,
     sample_index: int,
@@ -564,14 +593,51 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def split_rows(
+    task_rows: list[dict],
+    sft_rows: list[dict],
+    val_ratio: float,
+    rng: random.Random,
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    if not 0 <= val_ratio < 1:
+        raise ValueError("--val-ratio must be in [0, 1)")
+
+    indices = list(range(len(task_rows)))
+    rng.shuffle(indices)
+    n_val = int(round(len(indices) * val_ratio))
+    val_indices = set(indices[:n_val])
+
+    task_train: list[dict] = []
+    task_val: list[dict] = []
+    sft_train: list[dict] = []
+    sft_val: list[dict] = []
+    for idx, (task_row, sft_row) in enumerate(zip(task_rows, sft_rows)):
+        if idx in val_indices:
+            task_row["split"] = "synth_val"
+            task_val.append(task_row)
+            sft_val.append(sft_row)
+        else:
+            task_row["split"] = "synth_train"
+            task_train.append(task_row)
+            sft_train.append(sft_row)
+    return task_train, task_val, sft_train, sft_val
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate stage-1 SFT data")
     parser.add_argument("--out", type=Path, default=Path("data/stage1_synth"))
     parser.add_argument("--num-samples", type=int, default=2900)
+    parser.add_argument(
+        "--samples-per-template",
+        type=int,
+        default=None,
+        help="Generate this many samples for each selected template. Overrides --num-samples.",
+    )
     parser.add_argument("--seed", type=int, default=20260619)
     parser.add_argument("--min-points", type=int, default=6)
     parser.add_argument("--max-points", type=int, default=20)
     parser.add_argument("--n-test-points", type=int, default=50)
+    parser.add_argument("--val-ratio", type=float, default=0.05)
     parser.add_argument(
         "--templates",
         type=str,
@@ -590,6 +656,10 @@ def main() -> None:
     args = parse_args()
     if args.min_points < 2 or args.max_points < args.min_points:
         raise SystemExit("--min-points/--max-points must define a valid interval")
+    if args.samples_per_template is not None and args.samples_per_template < 1:
+        raise SystemExit("--samples-per-template must be positive")
+    if not 0 <= args.val_ratio < 1:
+        raise SystemExit("--val-ratio must be in [0, 1)")
 
     if args.out.exists() and args.overwrite:
         shutil.rmtree(args.out)
@@ -599,11 +669,18 @@ def main() -> None:
     templates = build_templates()
     forced_template_ids = [s.strip() for s in args.templates.split(",") if s.strip()] or None
     rng = random.Random(args.seed)
+    split_rng = random.Random(args.seed + 17)
+    schedule = build_template_schedule(
+        templates=templates,
+        rng=rng,
+        num_samples=args.num_samples,
+        samples_per_template=args.samples_per_template,
+        forced_template_ids=forced_template_ids,
+    )
 
     task_rows: list[dict] = []
     sft_rows: list[dict] = []
-    for i in range(args.num_samples):
-        template = choose_template(templates, rng, forced_template_ids)
+    for i, template in enumerate(schedule):
         task_sample, sft_sample = make_sample(
             template=template,
             sample_index=i,
@@ -616,18 +693,43 @@ def main() -> None:
         )
         task_rows.append(task_sample)
         sft_rows.append(sft_sample)
+        if (i + 1) % 100 == 0 or i + 1 == len(schedule):
+            print(f"[{i + 1}/{len(schedule)}] generated", flush=True)
+
+    task_train, task_val, sft_train, sft_val = split_rows(
+        task_rows=task_rows,
+        sft_rows=sft_rows,
+        val_ratio=args.val_ratio,
+        rng=split_rng,
+    )
 
     write_jsonl(args.out / "samples.jsonl", task_rows)
     write_jsonl(args.out / "sft_messages.jsonl", sft_rows)
+    write_jsonl(args.out / "samples_train.jsonl", task_train)
+    write_jsonl(args.out / "samples_val.jsonl", task_val)
+    write_jsonl(args.out / "sft_train.jsonl", sft_train)
+    write_jsonl(args.out / "sft_val.jsonl", sft_val)
+
+    template_counts = collections.Counter(row["generation_config"]["template_id"] for row in task_rows)
+    difficulty_counts = collections.Counter(row["difficulty_name"] for row in task_rows)
 
     manifest = {
         "num_samples": len(task_rows),
+        "num_train": len(task_train),
+        "num_val": len(task_val),
         "seed": args.seed,
-        "num_templates": len(templates),
-        "templates": [t.template_id for t in templates],
+        "val_ratio": args.val_ratio,
+        "num_templates": len(template_counts),
+        "templates": sorted(template_counts),
+        "template_counts": dict(sorted(template_counts.items())),
+        "difficulty_counts": dict(sorted(difficulty_counts.items())),
         "outputs": {
             "task_samples": "samples.jsonl",
             "sft_messages": "sft_messages.jsonl",
+            "task_train": "samples_train.jsonl",
+            "task_val": "samples_val.jsonl",
+            "sft_train": "sft_train.jsonl",
+            "sft_val": "sft_val.jsonl",
             "images": "images/",
         },
         "prompt_template": DEFAULT_PROMPT,
@@ -638,6 +740,8 @@ def main() -> None:
     print(f"Wrote {len(task_rows)} samples to {args.out}")
     print(f"Task-format JSONL: {args.out / 'samples.jsonl'}")
     print(f"SFT messages JSONL: {args.out / 'sft_messages.jsonl'}")
+    print(f"SFT train JSONL: {args.out / 'sft_train.jsonl'}")
+    print(f"SFT val JSONL: {args.out / 'sft_val.jsonl'}")
 
 
 if __name__ == "__main__":

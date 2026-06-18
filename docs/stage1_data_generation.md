@@ -16,7 +16,7 @@ python3 scripts/generate_stage1_data.py --out data/stage1_smoke --num-samples 29
 Generate a stronger first SFT set:
 
 ```bash
-python3 scripts/generate_stage1_data.py --out data/stage1_synth --num-samples 50000 --seed 20260619 --overwrite
+python3 scripts/generate_stage1_data.py --out data/stage1_synth --samples-per-template 100 --seed 20260619 --overwrite
 ```
 
 The output directory contains:
@@ -26,7 +26,13 @@ The output directory contains:
   reference points, expression, test points, and generation config.
 - `sft_messages.jsonl`: records with multimodal user messages and an assistant
   `<tool_call>` answer.
+- `samples_train.jsonl` / `samples_val.jsonl`: task-format split files.
+- `sft_train.jsonl` / `sft_val.jsonl`: SFT-ready split files.
 - `manifest.json`: generation settings and covered template ids.
+
+By default, `--num-samples 2900` is distributed as evenly as possible across the
+29 templates. Use `--samples-per-template N` when you want exact balance. The
+default validation ratio is 5%.
 
 ## Covered Families
 
