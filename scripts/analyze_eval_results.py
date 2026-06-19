@@ -17,6 +17,10 @@ R2_THRESHOLDS = (0.99, 0.95, 0.90, 0.80)
 FUNC_RE = re.compile(r"np\.([A-Za-z_][A-Za-z0-9_]*)")
 
 
+def threshold_key(threshold: float) -> str:
+    return f"acc@{threshold:.2f}"
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as f:
@@ -95,7 +99,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "median_r2": median(valid),
     }
     for threshold in R2_THRESHOLDS:
-        summary[f"acc@{threshold}"] = sum(1 for v in valid if v >= threshold)
+        summary[threshold_key(threshold)] = sum(1 for v in valid if v >= threshold)
     return summary
 
 
@@ -117,7 +121,7 @@ def print_table(
             continue
         s = summarize(group_rows)
         table.append((key, s))
-    table.sort(key=lambda item: (item[1]["acc@0.99"] / max(item[1]["n"], 1), item[1]["n"], item[0]))
+    table.sort(key=lambda item: (item[1][threshold_key(0.99)] / max(item[1]["n"], 1), item[1]["n"], item[0]))
     if limit is not None:
         table = table[:limit]
 
@@ -130,10 +134,10 @@ def print_table(
                 [
                     key,
                     str(n),
-                    pct(s["acc@0.99"], n),
-                    pct(s["acc@0.95"], n),
-                    pct(s["acc@0.90"], n),
-                    pct(s["acc@0.80"], n),
+                    pct(s[threshold_key(0.99)], n),
+                    pct(s[threshold_key(0.95)], n),
+                    pct(s[threshold_key(0.90)], n),
+                    pct(s[threshold_key(0.80)], n),
                     pct(s["null"], n),
                     fmt_float(s["mean_r2"]),
                     fmt_float(s["median_r2"]),
@@ -220,10 +224,10 @@ def main() -> None:
     print(
         "overall: "
         f"n={overall['n']} "
-        f"acc@0.99={pct(overall['acc@0.99'], overall['n'])} "
-        f"acc@0.95={pct(overall['acc@0.95'], overall['n'])} "
-        f"acc@0.90={pct(overall['acc@0.90'], overall['n'])} "
-        f"acc@0.80={pct(overall['acc@0.80'], overall['n'])} "
+        f"acc@0.99={pct(overall[threshold_key(0.99)], overall['n'])} "
+        f"acc@0.95={pct(overall[threshold_key(0.95)], overall['n'])} "
+        f"acc@0.90={pct(overall[threshold_key(0.90)], overall['n'])} "
+        f"acc@0.80={pct(overall[threshold_key(0.80)], overall['n'])} "
         f"null={pct(overall['null'], overall['n'])} "
         f"mean_r2={fmt_float(overall['mean_r2'])} "
         f"median_r2={fmt_float(overall['median_r2'])}"
