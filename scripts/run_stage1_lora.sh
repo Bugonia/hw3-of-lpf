@@ -17,6 +17,13 @@ export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
 mkdir -p "$OUTPUT_DIR" "$HF_HOME" "$PIP_CACHE_DIR"
 cd "$PROJECT_ROOT"
 
+if [[ "${NPROC_PER_NODE:-1}" -le 1 && "${ALLOW_DATA_PARALLEL:-0}" != "1" ]]; then
+  if [[ "${CUDA_VISIBLE_DEVICES:-}" == *","* ]]; then
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES%%,*}"
+    echo "NPROC_PER_NODE=1: using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} to avoid DataParallel."
+  fi
+fi
+
 if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
   python3 -m pip install -U \
     "git+https://github.com/huggingface/transformers" \

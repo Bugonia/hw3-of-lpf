@@ -63,6 +63,11 @@ run a one-step training smoke test:
 MAX_STEPS=1 MAX_TRAIN_SAMPLES=16 MAX_EVAL_SAMPLES=4 bash scripts/run_stage1_lora.sh
 ```
 
+When `NPROC_PER_NODE=1`, the run script narrows a multi-GPU
+`CUDA_VISIBLE_DEVICES` value to the first visible GPU. This avoids PyTorch
+`DataParallel`, which is brittle for Qwen3-VL's vision tower. Multi-GPU training
+uses `torchrun` by setting `NPROC_PER_NODE`.
+
 ## 6. Stage-1 LoRA Train
 
 ```bash
