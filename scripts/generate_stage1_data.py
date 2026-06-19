@@ -484,7 +484,21 @@ def build_template_schedule(
     num_samples: int,
     samples_per_template: int | None,
     forced_template_ids: list[str] | None,
+    template_sample_counts: dict[str, int] | None = None,
 ) -> list[Template]:
+    if template_sample_counts:
+        template_by_id = {template.template_id: template for template in templates}
+        unknown = sorted(set(template_sample_counts) - set(template_by_id))
+        if unknown:
+            raise ValueError(f"unknown template ids: {unknown}")
+        schedule = []
+        for template_id, count in template_sample_counts.items():
+            if count < 1:
+                raise ValueError(f"template sample count must be positive: {template_id}={count}")
+            schedule.extend([template_by_id[template_id]] * count)
+        rng.shuffle(schedule)
+        return schedule
+
     if forced_template_ids:
         unknown = sorted(set(forced_template_ids) - {t.template_id for t in templates})
         if unknown:
@@ -623,6 +637,30 @@ def split_rows(
     return task_train, task_val, sft_train, sft_val
 
 
+def parse_template_sample_counts(spec: str) -> dict[str, int] | None:
+    if not spec.strip():
+        return None
+    counts: dict[str, int] = {}
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"invalid --template-samples item: {item!r}; expected TEMPLATE_ID=COUNT")
+        template_id, raw_count = item.split("=", 1)
+        template_id = template_id.strip()
+        try:
+            count = int(raw_count.strip())
+        except ValueError as exc:
+            raise ValueError(f"invalid sample count for {template_id!r}: {raw_count!r}") from exc
+        if not template_id:
+            raise ValueError(f"invalid empty template id in --template-samples item: {item!r}")
+        if count < 1:
+            raise ValueError(f"template sample count must be positive: {template_id}={count}")
+        counts[template_id] = count
+    return counts or None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate stage-1 SFT data")
     parser.add_argument("--out", type=Path, default=Path("data/stage1_synth"))
@@ -632,6 +670,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Generate this many samples for each selected template. Overrides --num-samples.",
+    )
+    parser.add_argument(
+        "--template-samples",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated TEMPLATE_ID=COUNT entries. When set, overrides "
+            "--num-samples, --samples-per-template, and --templates."
+        ),
     )
     parser.add_argument("--seed", type=int, default=20260619)
     parser.add_argument("--min-points", type=int, default=6)
@@ -660,6 +707,10 @@ def main() -> None:
         raise SystemExit("--samples-per-template must be positive")
     if not 0 <= args.val_ratio < 1:
         raise SystemExit("--val-ratio must be in [0, 1)")
+    try:
+        template_sample_counts = parse_template_sample_counts(args.template_samples)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     if args.out.exists() and args.overwrite:
         shutil.rmtree(args.out)
@@ -676,6 +727,7 @@ def main() -> None:
         num_samples=args.num_samples,
         samples_per_template=args.samples_per_template,
         forced_template_ids=forced_template_ids,
+        template_sample_counts=template_sample_counts,
     )
 
     task_rows: list[dict] = []
@@ -719,6 +771,7 @@ def main() -> None:
         "num_val": len(task_val),
         "seed": args.seed,
         "val_ratio": args.val_ratio,
+        "template_samples_arg": args.template_samples,
         "num_templates": len(template_counts),
         "templates": sorted(template_counts),
         "template_counts": dict(sorted(template_counts.items())),

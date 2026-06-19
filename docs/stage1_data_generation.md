@@ -34,6 +34,19 @@ By default, `--num-samples 2900` is distributed as evenly as possible across the
 29 templates. Use `--samples-per-template N` when you want exact balance. The
 default validation ratio is 5%.
 
+For targeted follow-up runs, pass exact per-template counts:
+
+```bash
+python3 scripts/generate_stage1_data.py \
+  --out data/stage2_targeted \
+  --template-samples 'L1_sin=120,L3_beat=700,L5_log_sin_sq_cos=760' \
+  --overwrite
+```
+
+The repository also includes `scripts/generate_stage2_targeted_data.sh`, which
+uses the first Stage-1 dev analysis to oversample the weakest templates while
+keeping all 29 families represented.
+
 ## Covered Families
 
 The generator includes:

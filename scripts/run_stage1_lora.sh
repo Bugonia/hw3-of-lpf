@@ -6,6 +6,9 @@ PUBLIC_ROOT="${PUBLIC_ROOT:-/inspire/hdd/project/generative-large-model/public}"
 USER_GLOBAL="${USER_GLOBAL:-/inspire/hdd/global_user/zhongxiaoqiu-253108120179}"
 MODEL_DIR="${MODEL_DIR:-${PUBLIC_ROOT}/models/Qwen3-VL-8B-Instruct}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PUBLIC_ROOT}/outputs/qwen3_vl_stage1_lora}"
+TRAIN_JSONL="${TRAIN_JSONL:-data/stage1_synth/sft_train.jsonl}"
+EVAL_JSONL="${EVAL_JSONL:-data/stage1_synth/sft_val.jsonl}"
+DATA_ROOT="${DATA_ROOT:-data/stage1_synth}"
 
 export HF_HOME="${HF_HOME:-${USER_GLOBAL}/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
@@ -35,9 +38,9 @@ fi
 
 TRAIN_ARGS=(
   --model-name-or-path "$MODEL_DIR"
-  --train-jsonl data/stage1_synth/sft_train.jsonl
-  --eval-jsonl data/stage1_synth/sft_val.jsonl
-  --data-root data/stage1_synth
+  --train-jsonl "$TRAIN_JSONL"
+  --eval-jsonl "$EVAL_JSONL"
+  --data-root "$DATA_ROOT"
   --output-dir "$OUTPUT_DIR"
   --max-length "${MAX_LENGTH:-4096}"
   --num-train-epochs "${NUM_TRAIN_EPOCHS:-1}"
@@ -57,6 +60,10 @@ TRAIN_ARGS=(
   --attn-implementation "${ATTN_IMPLEMENTATION:-sdpa}"
   --optim "${OPTIM:-paged_adamw_8bit}"
 )
+
+if [[ -n "${ADAPTER_NAME_OR_PATH:-}" ]]; then
+  TRAIN_ARGS+=(--adapter-name-or-path "$ADAPTER_NAME_OR_PATH")
+fi
 
 if [[ "${LOAD_IN_4BIT:-1}" == "1" ]]; then
   TRAIN_ARGS+=(--load-in-4bit)

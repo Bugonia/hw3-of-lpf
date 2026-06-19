@@ -22,7 +22,7 @@ from transformers import (
     set_seed,
 )
 
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 VISION_NAME_MARKERS = (
@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--adapter-name-or-path",
+        default=None,
+        help="Optional existing LoRA adapter to continue training from.",
+    )
     parser.add_argument(
         "--lora-target-modules",
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
@@ -259,16 +264,20 @@ def load_model(args: argparse.Namespace):
             use_gradient_checkpointing=args.gradient_checkpointing,
         )
 
-    target_modules = [part.strip() for part in args.lora_target_modules.split(",") if part.strip()]
-    lora_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=target_modules,
-    )
-    model = get_peft_model(model, lora_config)
+    if args.adapter_name_or_path:
+        model = PeftModel.from_pretrained(model, args.adapter_name_or_path, is_trainable=True)
+        print(f"Loaded trainable LoRA adapter from {args.adapter_name_or_path}")
+    else:
+        target_modules = [part.strip() for part in args.lora_target_modules.split(",") if part.strip()]
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=target_modules,
+        )
+        model = get_peft_model(model, lora_config)
 
     if args.freeze_vision_lora:
         frozen = 0

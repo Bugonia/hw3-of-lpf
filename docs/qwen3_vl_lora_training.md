@@ -117,3 +117,42 @@ python eval.py /inspire/hdd/project/generative-large-model/public/outputs/qwen3_
   --reasoning-parser qwen3 \
   --tool-call-parser hermes
 ```
+
+## 8. Stage-2 Targeted Continuation
+
+After Stage 1, the first dev run reached `acc@0.99=42.0%` with `null=0%`.
+Errors concentrated in the templates with many distractors and nested functions
+(`L5_log_sin_sq_cos`, `L3_beat`, `L5_exp_sin_sq`, `L4_sin_of_exp`,
+`L4_sqrt_cos_sq`, and related families). Generate a targeted set:
+
+```bash
+bash scripts/generate_stage2_targeted_data.sh
+```
+
+Continue training from the Stage-1 adapter on four H100 GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+NPROC_PER_NODE=4 \
+LOAD_IN_4BIT=0 \
+PER_DEVICE_TRAIN_BATCH_SIZE=1 \
+PER_DEVICE_EVAL_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+NUM_TRAIN_EPOCHS=1 \
+LEARNING_RATE=5e-5 \
+bash scripts/run_stage2_lora.sh
+```
+
+Merge and evaluate:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/merge_stage2_lora.sh
+
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  /inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage2_merged \
+  --split dev \
+  --tp 1 \
+  --reasoning-parser qwen3 \
+  --tool-call-parser hermes \
+  --enforce-eager
+```
