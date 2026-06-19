@@ -164,21 +164,31 @@ class VLDataCollator:
         return full_inputs
 
     def _encode(self, conversations: list[list[dict[str, Any]]], add_generation_prompt: bool) -> dict[str, torch.Tensor]:
-        kwargs = {
+        template_kwargs = {
             "tokenize": True,
             "add_generation_prompt": add_generation_prompt,
             "return_dict": True,
+        }
+        processor_kwargs = {
             "return_tensors": "pt",
             "padding": True,
             "truncation": True,
             "max_length": self.max_length,
         }
         try:
-            return self.processor.apply_chat_template(conversations, **kwargs)
+            return self.processor.apply_chat_template(
+                conversations,
+                **template_kwargs,
+                processor_kwargs=processor_kwargs,
+            )
         except TypeError:
-            kwargs.pop("truncation", None)
-            kwargs.pop("max_length", None)
-            return self.processor.apply_chat_template(conversations, **kwargs)
+            legacy_kwargs = {**template_kwargs, **processor_kwargs}
+            try:
+                return self.processor.apply_chat_template(conversations, **legacy_kwargs)
+            except TypeError:
+                legacy_kwargs.pop("truncation", None)
+                legacy_kwargs.pop("max_length", None)
+                return self.processor.apply_chat_template(conversations, **legacy_kwargs)
 
 
 def import_qwen3_vl_model_class():
@@ -306,6 +316,8 @@ def build_training_args(args: argparse.Namespace) -> TrainingArguments:
         kwargs["evaluation_strategy"] = "steps"
     if "gradient_checkpointing_kwargs" in params:
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    if "ddp_find_unused_parameters" in params:
+        kwargs["ddp_find_unused_parameters"] = False
     kwargs = {key: value for key, value in kwargs.items() if key in params}
     return TrainingArguments(**kwargs)
 
