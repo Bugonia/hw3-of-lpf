@@ -7,6 +7,26 @@ SEED="${SEED:-20260620}"
 
 cd "$PROJECT_ROOT"
 
+if ! python3 - <<'PY' >/dev/null 2>&1
+import matplotlib  # noqa: F401
+import numpy  # noqa: F401
+PY
+then
+  cat >&2 <<'EOF'
+Missing data-generation dependencies in the active Python environment.
+
+Install once in the shared hw3 environment from the online instance:
+
+  source /inspire/hdd/project/generative-large-model/public/envs/hw3/bin/activate
+  python -m pip install -U matplotlib numpy pillow
+
+Then rerun:
+
+  bash scripts/generate_stage2_targeted_data.sh
+EOF
+  exit 1
+fi
+
 # Counts are based on the first Stage-1 dev analysis:
 # - keep every family represented;
 # - heavily oversample templates with low acc@0.99 or catastrophic R2 failures.

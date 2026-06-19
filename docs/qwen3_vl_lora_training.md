@@ -126,6 +126,7 @@ Errors concentrated in the templates with many distractors and nested functions
 `L4_sqrt_cos_sq`, and related families). Generate a targeted set:
 
 ```bash
+python -m pip install -U matplotlib numpy pillow
 bash scripts/generate_stage2_targeted_data.sh
 ```
 

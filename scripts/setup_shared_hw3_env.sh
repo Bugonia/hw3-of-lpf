@@ -38,6 +38,8 @@ python -m pip install -U \
   accelerate \
   peft \
   bitsandbytes \
+  matplotlib \
+  numpy \
   pillow \
   tensorboard \
   safetensors \
@@ -47,11 +49,13 @@ python -m pip install -U \
 
 python - <<'PY'
 import accelerate
+import matplotlib
 import peft
 import torch
 import transformers
 
 print("python environment ready")
+print("matplotlib", matplotlib.__version__)
 print("torch", torch.__version__)
 print("cuda_available", torch.cuda.is_available())
 print("transformers", transformers.__version__)

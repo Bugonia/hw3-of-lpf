@@ -30,7 +30,7 @@ fi
 if [[ "${INSTALL_DEPS:-0}" == "1" ]]; then
   python3 -m pip install -U \
     "git+https://github.com/huggingface/transformers" \
-    accelerate peft bitsandbytes pillow tensorboard
+    accelerate peft bitsandbytes matplotlib numpy pillow tensorboard
 fi
 if [[ "${INSTALL_ONLY:-0}" == "1" ]]; then
   exit 0
