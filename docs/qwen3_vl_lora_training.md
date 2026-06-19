@@ -82,6 +82,13 @@ safety. Override any hyperparameter with environment variables, for example:
 NUM_TRAIN_EPOCHS=2 LEARNING_RATE=1e-4 LORA_R=32 bash scripts/run_stage1_lora.sh
 ```
 
+The default attention backend is PyTorch SDPA so the environment does not need
+FlashAttention2. If `flash-attn` is installed, you can opt in with:
+
+```bash
+ATTN_IMPLEMENTATION=flash_attention_2 bash scripts/run_stage1_lora.sh
+```
+
 ## 7. Merge for Official Eval
 
 The official `eval.py` loads a normal model directory, so merge the adapter:

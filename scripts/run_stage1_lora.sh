@@ -47,6 +47,7 @@ TRAIN_ARGS=(
   --lora-r "${LORA_R:-16}"
   --lora-alpha "${LORA_ALPHA:-32}"
   --lora-dropout "${LORA_DROPOUT:-0.05}"
+  --attn-implementation "${ATTN_IMPLEMENTATION:-sdpa}"
   --optim "${OPTIM:-paged_adamw_8bit}"
 )
 

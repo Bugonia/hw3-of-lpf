@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--attn-implementation",
-        default="flash_attention_2",
+        default="sdpa",
         choices=["flash_attention_2", "sdpa", "eager", "auto"],
     )
     parser.add_argument("--optim", default="paged_adamw_8bit")
