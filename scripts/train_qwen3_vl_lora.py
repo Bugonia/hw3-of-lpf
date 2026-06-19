@@ -275,6 +275,7 @@ def load_model(args: argparse.Namespace):
 
 
 def build_training_args(args: argparse.Namespace) -> TrainingArguments:
+    params = inspect.signature(TrainingArguments.__init__).parameters
     kwargs: dict[str, Any] = {
         "output_dir": args.output_dir,
         "per_device_train_batch_size": args.per_device_train_batch_size,
@@ -296,15 +297,16 @@ def build_training_args(args: argparse.Namespace) -> TrainingArguments:
         "remove_unused_columns": False,
         "dataloader_num_workers": args.dataloader_num_workers,
         "gradient_checkpointing": args.gradient_checkpointing,
-        "save_safetensors": True,
     }
-    params = inspect.signature(TrainingArguments.__init__).parameters
+    if "save_safetensors" in params:
+        kwargs["save_safetensors"] = True
     if "eval_strategy" in params:
         kwargs["eval_strategy"] = "steps"
     else:
         kwargs["evaluation_strategy"] = "steps"
     if "gradient_checkpointing_kwargs" in params:
         kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    kwargs = {key: value for key, value in kwargs.items() if key in params}
     return TrainingArguments(**kwargs)
 
 
