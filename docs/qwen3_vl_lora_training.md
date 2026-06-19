@@ -9,7 +9,31 @@ cd /inspire/hdd/project/generative-large-model/public/hw3-of-lpf
 git pull --ff-only origin main
 ```
 
-## 2. Install Training Dependencies
+## 2. Create the Shared `hw3` Environment
+
+The online and offline instances can both access the project public directory, so
+create the environment directly there from the online instance:
+
+```bash
+bash scripts/setup_shared_hw3_env.sh
+```
+
+This creates:
+
+```text
+/inspire/hdd/project/generative-large-model/public/envs/hw3
+```
+
+Activate the same environment from either instance:
+
+```bash
+source /inspire/hdd/project/generative-large-model/public/envs/hw3/bin/activate
+```
+
+If the base image already has a working CUDA PyTorch and you do not want to
+install PyTorch into the shared environment, use `INSTALL_TORCH=0`.
+
+## 3. Install Training Dependencies Only
 
 The Qwen3-VL model card recommends a recent Transformers build. Install once on
 the server image or use `INSTALL_DEPS=1 INSTALL_ONLY=1` in the run script.
@@ -18,7 +42,7 @@ the server image or use `INSTALL_DEPS=1 INSTALL_ONLY=1` in the run script.
 INSTALL_DEPS=1 INSTALL_ONLY=1 bash scripts/run_stage1_lora.sh
 ```
 
-## 3. Data Collation Dry Run
+## 4. Data Collation Dry Run
 
 After the base model is available, check the processor/chat-template path without
 loading model weights:
@@ -29,7 +53,7 @@ DRY_RUN_BATCH=1 bash scripts/run_stage1_lora.sh
 
 `DRY_RUN_BATCH=1` builds one multimodal batch and exits before loading the model.
 
-## 4. Smoke Train
+## 5. Smoke Train
 
 After the base model is available at
 `/inspire/hdd/project/generative-large-model/public/models/Qwen3-VL-8B-Instruct`,
@@ -39,7 +63,7 @@ run a one-step training smoke test:
 MAX_STEPS=1 MAX_TRAIN_SAMPLES=16 MAX_EVAL_SAMPLES=4 bash scripts/run_stage1_lora.sh
 ```
 
-## 5. Stage-1 LoRA Train
+## 6. Stage-1 LoRA Train
 
 ```bash
 bash scripts/run_stage1_lora.sh
@@ -58,7 +82,7 @@ safety. Override any hyperparameter with environment variables, for example:
 NUM_TRAIN_EPOCHS=2 LEARNING_RATE=1e-4 LORA_R=32 bash scripts/run_stage1_lora.sh
 ```
 
-## 6. Merge for Official Eval
+## 7. Merge for Official Eval
 
 The official `eval.py` loads a normal model directory, so merge the adapter:
 
