@@ -157,3 +157,25 @@ CUDA_VISIBLE_DEVICES=0 python eval.py \
   --tool-call-parser hermes \
   --enforce-eager
 ```
+
+## 9. Output Directory Convention
+
+All project results should live under the repository directory:
+
+```text
+/inspire/hdd/project/generative-large-model/public/hw3-of-lpf
+```
+
+Training adapters and merged models default to:
+
+```text
+/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/
+```
+
+Evaluation summaries remain in the repository-local `eval_outputs/` directory.
+If older runs were written to `/inspire/hdd/project/generative-large-model/public/outputs`,
+copy them into the project directory with:
+
+```bash
+bash scripts/migrate_outputs_to_project.sh
+```
