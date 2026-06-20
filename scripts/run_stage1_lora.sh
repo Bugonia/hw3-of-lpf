@@ -58,12 +58,19 @@ TRAIN_ARGS=(
   --lora-r "${LORA_R:-16}"
   --lora-alpha "${LORA_ALPHA:-32}"
   --lora-dropout "${LORA_DROPOUT:-0.05}"
+  --lora-target-modules "${LORA_TARGET_MODULES:-q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj}"
   --attn-implementation "${ATTN_IMPLEMENTATION:-sdpa}"
   --optim "${OPTIM:-paged_adamw_8bit}"
 )
 
 if [[ -n "${ADAPTER_NAME_OR_PATH:-}" ]]; then
   TRAIN_ARGS+=(--adapter-name-or-path "$ADAPTER_NAME_OR_PATH")
+fi
+
+if [[ "${FREEZE_VISION_LORA:-1}" == "1" ]]; then
+  TRAIN_ARGS+=(--freeze-vision-lora)
+else
+  TRAIN_ARGS+=(--no-freeze-vision-lora)
 fi
 
 if [[ "${LOAD_IN_4BIT:-1}" == "1" ]]; then

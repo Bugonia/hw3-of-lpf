@@ -274,3 +274,46 @@ CUDA_VISIBLE_DEVICES=0 python eval.py \
   --tool-call-parser hermes \
   --enforce-eager
 ```
+
+## 12. Stage-6 Fresh Higher-Rank Vision LoRA
+
+Changing LoRA rank or target modules does not work when continuing an existing
+adapter, because the adapter config already fixes those choices. To increase
+capacity and let the vision side adapt, first merge the best previous adapter,
+then start a fresh higher-rank adapter on top of that merged model.
+
+`scripts/run_stage6_vision_lora.sh` does this automatically. It picks the best
+available merged base in this order: Stage 5 reasoning, Stage 4 repair, Stage 3,
+then the original Qwen3-VL model. It trains a new rank-32 adapter with
+vision-side LoRA unfrozen and includes `qkv` in the target modules for common
+vision-attention blocks.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+NPROC_PER_NODE=2 \
+LOAD_IN_4BIT=0 \
+PER_DEVICE_TRAIN_BATCH_SIZE=2 \
+PER_DEVICE_EVAL_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+NUM_TRAIN_EPOCHS=1 \
+LEARNING_RATE=1e-5 \
+SAVE_STRATEGY=no \
+bash scripts/run_stage6_vision_lora.sh
+```
+
+If memory is tight, lower `PER_DEVICE_TRAIN_BATCH_SIZE` to `1`. If the run is
+stable and underfitting, try `LORA_R=64 LORA_ALPHA=128`.
+
+Merge and evaluate:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/merge_stage6_vision_lora.sh
+
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage6_vision_merged \
+  --split dev \
+  --tp 1 \
+  --reasoning-parser qwen3 \
+  --tool-call-parser hermes \
+  --enforce-eager
+```
