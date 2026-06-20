@@ -41,8 +41,8 @@ def parse_args() -> argparse.Namespace:
         "--model-name-or-path",
         default="/inspire/hdd/project/generative-large-model/public/models/Qwen3-VL-8B-Instruct",
     )
-    parser.add_argument("--train-jsonl", default="data/stage1_synth/sft_train.jsonl")
-    parser.add_argument("--eval-jsonl", default="data/stage1_synth/sft_val.jsonl")
+    parser.add_argument("--train-jsonl", default="data/sft_v2/sft_train.jsonl")
+    parser.add_argument("--eval-jsonl", default="data/sft_v2/sft_val.jsonl")
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--output-dir",

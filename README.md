@@ -121,3 +121,17 @@ HW3_release/
     samples.jsonl      300 条验证样本 (含真值) 
     images/            300 张曲线图
 ```
+
+---
+
+## 10. 本仓库当前干净工作流
+
+本仓库只保留原始 dev 数据、通用数据生成器、通用 LoRA 训练/合并脚本和评测分析工具。新实验从这里开始：
+
+```bash
+bash scripts/generate_v2_data.sh
+bash scripts/run_lora_sft.sh
+bash scripts/merge_lora.sh
+```
+
+完整方案说明见 `docs/clean_workflow.md`；新开对话的上下文提示词见 `docs/new_conversation_prompt.md`。

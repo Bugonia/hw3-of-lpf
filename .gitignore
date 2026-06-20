@@ -12,6 +12,7 @@ env/
 
 # Generated datasets and model artifacts
 data/stage1_*/
+data/sft_*/
 data/synth*/
 eval_outputs/
 outputs/
