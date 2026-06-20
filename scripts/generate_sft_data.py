@@ -734,6 +734,44 @@ def format_visual_feature_lines(features: dict) -> list[str]:
     return lines
 
 
+def summarize_visual_features(features: dict) -> str:
+    if features.get("status") != "ok":
+        return "the plotted curve shape"
+
+    parts: list[str] = []
+    if features.get("oscillatory"):
+        period = features.get("estimated_period")
+        period_text = f" with rough period {fmt_num(period)}" if period else ""
+        parts.append(f"an oscillatory curve{period_text}")
+    else:
+        monotonicity = features.get("monotonicity")
+        if monotonicity == "mostly_increasing":
+            parts.append("a mostly increasing non-oscillatory curve")
+        elif monotonicity == "mostly_decreasing":
+            parts.append("a mostly decreasing non-oscillatory curve")
+        else:
+            parts.append("a non-oscillatory curve")
+
+    symmetry_type = features.get("symmetry", {}).get("type")
+    if symmetry_type in {"even_like", "odd_like"}:
+        parts.append(symmetry_type.replace("_", "-"))
+
+    amplitude_trend = features.get("amplitude_trend")
+    if amplitude_trend == "decays_left_to_right":
+        parts.append("decaying envelope")
+    elif amplitude_trend == "grows_left_to_right":
+        parts.append("growing envelope")
+    elif amplitude_trend == "center_dominant":
+        parts.append("center-dominant envelope")
+
+    y_min = features.get("y_min")
+    y_max = features.get("y_max")
+    if y_min is not None and y_max is not None:
+        parts.append(f"visible y-range [{fmt_num(y_min)}, {fmt_num(y_max)}]")
+
+    return ", ".join(parts)
+
+
 def build_prompt(function_hints: list[str], data_points: list[list[float]]) -> str:
     hints_text = (
         "Available functions: " + ", ".join(function_hints) + "\n"
@@ -1182,6 +1220,52 @@ def build_point_check_answer(
     return "\n".join(lines), family_rounds
 
 
+def build_short_check_answer(
+    all_templates: list[Template],
+    template: Template,
+    params: dict[str, float],
+    true_expr: str,
+    function_hints: list[str],
+    data_points: list[list[float]],
+    visual_features: dict,
+    rng: random.Random,
+    num_hard_negatives: int,
+    num_candidate_families: int,
+    max_family_param_guesses: int,
+    accept_max_abs_error: float,
+    num_verification_points: int,
+) -> tuple[str, list[dict]]:
+    candidate_checks = build_candidate_family_rounds(
+        all_templates=all_templates,
+        true_template=template,
+        true_params=params,
+        true_expr=true_expr,
+        function_hints=function_hints,
+        data_points=data_points,
+        rng=rng,
+        num_candidate_families=num_candidate_families,
+        num_hard_negatives=num_hard_negatives,
+        max_family_param_guesses=max_family_param_guesses,
+        accept_max_abs_error=accept_max_abs_error,
+    )
+    hint_text = ", ".join(function_hints) if function_hints else "polynomial terms"
+    true_error = candidate_point_error(true_expr, data_points)
+    checks = candidate_reference_checks(true_expr, data_points, num_verification_points)
+    check_text = f"; checks: {format_reference_checks(checks)}" if checks else "."
+    lines = [
+        "<think>",
+        f"The curve suggests {summarize_visual_features(visual_features)}; hints are {hint_text}.",
+        (
+            f"Reference points select {true_expr}; "
+            f"max_abs_error={format_point_error(true_error)}"
+            + check_text
+        ),
+        "</think>",
+        build_tool_call(true_expr),
+    ]
+    return "\n".join(lines), candidate_checks
+
+
 def build_assistant_answer(
     assistant_style: str,
     all_templates: list[Template],
@@ -1202,6 +1286,22 @@ def build_assistant_answer(
         return build_tool_call(true_expr), []
     if assistant_style == "point_check":
         return build_point_check_answer(
+            all_templates=all_templates,
+            template=template,
+            params=params,
+            true_expr=true_expr,
+            function_hints=function_hints,
+            data_points=data_points,
+            visual_features=visual_features,
+            rng=rng,
+            num_hard_negatives=num_hard_negatives,
+            num_candidate_families=num_candidate_families,
+            max_family_param_guesses=max_family_param_guesses,
+            accept_max_abs_error=accept_max_abs_error,
+            num_verification_points=num_verification_points,
+        )
+    if assistant_style == "short_check":
+        return build_short_check_answer(
             all_templates=all_templates,
             template=template,
             params=params,
@@ -1311,6 +1411,7 @@ def make_sample(
     accept_max_abs_error: float,
     num_verification_points: int,
     tool_only_ratio: float,
+    mixed_reasoning_style: str,
 ) -> tuple[dict, dict]:
     params = {name: rng.choice(values) for name, values in template.param_choices.items()}
     expr = template.expression_builder(params)
@@ -1329,7 +1430,9 @@ def make_sample(
     prompt = build_prompt(function_hints, data_points)
     effective_assistant_style = assistant_style
     if assistant_style == "mixed":
-        effective_assistant_style = "tool_only" if rng.random() < tool_only_ratio else "point_check"
+        effective_assistant_style = (
+            "tool_only" if rng.random() < tool_only_ratio else mixed_reasoning_style
+        )
     assistant_answer, candidate_checks = build_assistant_answer(
         assistant_style=effective_assistant_style,
         all_templates=all_templates,
@@ -1383,6 +1486,7 @@ def make_sample(
             "full_function_domain": [float(x_range[0]), float(x_range[1])],
             "assistant_style": assistant_style,
             "effective_assistant_style": effective_assistant_style,
+            "mixed_reasoning_style": mixed_reasoning_style,
             "num_candidate_families": num_candidate_families,
             "max_family_param_guesses": max_family_param_guesses,
             "accept_max_abs_error": accept_max_abs_error,
@@ -1399,6 +1503,7 @@ def make_sample(
         "expression_numpy": expr,
         "assistant_style": assistant_style,
         "effective_assistant_style": effective_assistant_style,
+        "mixed_reasoning_style": mixed_reasoning_style,
         "num_candidate_families": num_candidate_families,
         "accept_max_abs_error": accept_max_abs_error,
         "num_verification_points": num_verification_points,
@@ -1504,14 +1609,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=0.05)
     parser.add_argument(
         "--assistant-style",
-        choices=["tool_only", "point_check", "mixed"],
+        choices=["tool_only", "point_check", "short_check", "mixed"],
         default="tool_only",
         help=(
-            "Assistant target style. point_check adds short reasoning that "
-            "guesses candidate families from the image/hints, tests hard-negative "
-            "parameter variants on reference points, then calls the tool. mixed "
-            "samples both tool_only and point_check targets."
+            "Assistant target style. point_check writes long family/candidate audits; "
+            "short_check writes a compact visual cue plus reference-point check; "
+            "mixed samples tool_only plus the style selected by --mixed-reasoning-style."
         ),
+    )
+    parser.add_argument(
+        "--mixed-reasoning-style",
+        choices=["point_check", "short_check"],
+        default="point_check",
+        help="Reasoning style to mix with tool_only when --assistant-style mixed.",
     )
     parser.add_argument(
         "--tool-only-ratio",
@@ -1626,6 +1736,7 @@ def main() -> None:
             accept_max_abs_error=args.accept_max_abs_error,
             num_verification_points=args.num_verification_points,
             tool_only_ratio=args.tool_only_ratio,
+            mixed_reasoning_style=args.mixed_reasoning_style,
         )
         task_rows.append(task_sample)
         sft_rows.append(sft_sample)
@@ -1656,6 +1767,7 @@ def main() -> None:
         "seed": args.seed,
         "val_ratio": args.val_ratio,
         "assistant_style": args.assistant_style,
+        "mixed_reasoning_style": args.mixed_reasoning_style,
         "tool_only_ratio": args.tool_only_ratio,
         "num_hard_negatives": args.num_hard_negatives,
         "num_candidate_families": args.num_candidate_families,
