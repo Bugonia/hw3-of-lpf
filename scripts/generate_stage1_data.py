@@ -445,6 +445,201 @@ def build_tool_call(expr: str) -> str:
     return "<tool_call>\n" + json.dumps(payload, ensure_ascii=False) + "\n</tool_call>"
 
 
+def format_point_error(value: float) -> str:
+    if not math.isfinite(value):
+        return "invalid"
+    if value < 1e-5:
+        return "<1e-5"
+    if value < 1e-4:
+        return "<1e-4"
+    return f"{value:.4g}"
+
+
+def candidate_point_error(expr: str, data_points: list[list[float]]) -> float:
+    x = np.asarray([point[0] for point in data_points], dtype=np.float64)
+    y_true = np.asarray([point[1] for point in data_points], dtype=np.float64)
+    try:
+        y_pred = evaluate_expression(expr, x)
+    except Exception:
+        return float("inf")
+    if y_pred.shape != y_true.shape or not np.all(np.isfinite(y_pred)):
+        return float("inf")
+    return float(np.max(np.abs(y_pred - y_true)))
+
+
+def nearby_param_values(values: list[float], current: float) -> list[float]:
+    unique_values = sorted(set(values))
+    return [
+        value
+        for value in sorted(unique_values, key=lambda value: (abs(value - current), value))
+        if abs(value - current) > 1e-12
+    ]
+
+
+def build_hard_negative_candidates(
+    template: Template,
+    params: dict[str, float],
+    true_expr: str,
+    data_points: list[list[float]],
+    rng: random.Random,
+    limit: int,
+) -> list[dict]:
+    if limit <= 0:
+        return []
+
+    candidates = []
+    for name, values in template.param_choices.items():
+        for alt_value in nearby_param_values(values, params[name])[:3]:
+            alt_params = dict(params)
+            alt_params[name] = alt_value
+            alt_expr = template.expression_builder(alt_params)
+            if alt_expr == true_expr:
+                continue
+            error = candidate_point_error(alt_expr, data_points)
+            if not math.isfinite(error):
+                continue
+            candidates.append(
+                {
+                    "expression": alt_expr,
+                    "changed_param": name,
+                    "from": float(params[name]),
+                    "to": float(alt_value),
+                    "max_abs_error": error,
+                }
+            )
+
+    # Shuffle before sorting so ties do not always expose the same parameter.
+    rng.shuffle(candidates)
+    candidates.sort(key=lambda item: item["max_abs_error"])
+
+    selected = []
+    seen = {true_expr}
+    for candidate in candidates:
+        if candidate["expression"] in seen:
+            continue
+        selected.append(candidate)
+        seen.add(candidate["expression"])
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+FAMILY_DESCRIPTIONS = {
+    "L1_sin": "a simple sinusoid, so nearby amplitude and frequency choices are plausible",
+    "L1_cos": "a cosine wave, so frequency and amplitude are the main confusable parameters",
+    "L1_exp_grow": "monotone exponential growth, so the scale and exponent coefficient need point checks",
+    "L1_exp_decay": "monotone exponential decay, so nearby negative exponent coefficients are easy to confuse",
+    "L1_sqrt": "a square-root curve, so scale factors are the main candidates",
+    "L1_poly": "a symmetric/asymmetric power curve, so coefficient and power are the candidates",
+    "L2_gaussian": "a Gaussian-like bump with an offset, so exp(-b*x**2) coefficients are plausible hard negatives",
+    "L2_sin_plus_linear": "an oscillation riding on a line, so sine frequency and linear slope both need checking",
+    "L2_sin_full": "a shifted sinusoid, so amplitude, frequency, phase, and vertical offset can all be confused",
+    "L2_sin_cos": "a sine/cosine mixture, so the two frequencies are plausible alternatives",
+    "L2_log": "a log-shaped even curve with an offset, so log scale and vertical shift need checking",
+    "L2_exp_offset": "an exponential curve with a vertical offset, so exponent sign/size and offset are candidates",
+    "L2_cos_full": "a shifted cosine, so adjacent frequencies such as 3 versus 4 must be tested",
+    "L3_chirp": "a chirp-like oscillation where the phase depends on x**2",
+    "L3_sqrt_sin": "an oscillation with a sqrt(abs(x)) envelope",
+    "L3_damped_osc": "a damped cosine where decay rate and frequency are both visually plausible",
+    "L3_gauss_sin": "a sinusoid under a Gaussian envelope, so envelope width and sine frequency are hard negatives",
+    "L3_beat": "a beat pattern from multiplying sine and cosine terms",
+    "L3_growing_osc": "an oscillation with an x envelope, so frequency and scale need reference-point checks",
+    "L4_log_sin": "a nested log-sin expression, so log scale and sine frequency candidates are close",
+    "L4_three_terms": "a three-term mixture of sinusoid, Gaussian bump, and linear trend",
+    "L4_exp_chirp": "a decaying chirp, so decay and chirp coefficients are both candidates",
+    "L4_sqrt_cos_sq": "a sqrt of a shifted cosine-of-x**2 curve",
+    "L4_sin_of_exp": "a sine of an exponential phase, where exp coefficient and sine multiplier are easy to mix up",
+    "L5_sqrt_chirp_poly": "a sqrt-chirp plus polynomial trend",
+    "L5_tanh_nested": "a saturated tanh-sine structure plus another sinusoid",
+    "L5_exp_sin_sq": "an exp(-b*sin(c*x)**2) envelope plus a cosine term",
+    "L5_fm_signal": "a frequency-modulated sine where carrier and modulation frequencies are confusable",
+    "L5_log_sin_sq_cos": "a log of a sin(x**2) term plus a cosine correction",
+}
+
+
+def build_point_check_answer(
+    template: Template,
+    params: dict[str, float],
+    true_expr: str,
+    function_hints: list[str],
+    data_points: list[list[float]],
+    rng: random.Random,
+    num_hard_negatives: int,
+) -> tuple[str, list[dict]]:
+    hard_negatives = build_hard_negative_candidates(
+        template=template,
+        params=params,
+        true_expr=true_expr,
+        data_points=data_points,
+        rng=rng,
+        limit=num_hard_negatives,
+    )
+    true_candidate = {
+        "expression": true_expr,
+        "changed_param": None,
+        "from": None,
+        "to": None,
+        "max_abs_error": candidate_point_error(true_expr, data_points),
+    }
+    candidates = [true_candidate] + hard_negatives
+
+    family = FAMILY_DESCRIPTIONS.get(
+        template.template_id,
+        "a function family consistent with the visible curve and available functions",
+    )
+    hint_text = ", ".join(function_hints) if function_hints else "polynomial terms"
+
+    lines = [
+        "<think>",
+        f"The image and hints ({hint_text}) suggest {family}.",
+        "I form a few visually plausible candidate expressions and test them on the reference points:",
+    ]
+    for idx, candidate in enumerate(candidates, start=1):
+        change = ""
+        if candidate["changed_param"] is not None:
+            change = (
+                f" [{candidate['changed_param']}: "
+                f"{fmt_num(candidate['from'])}->{fmt_num(candidate['to'])}]"
+            )
+        lines.append(
+            f"{idx}. {candidate['expression']}{change}; "
+            f"max_abs_error={format_point_error(candidate['max_abs_error'])}."
+        )
+    lines.extend(
+        [
+            f"The expression with the smallest point error is {true_expr}, so I submit it.",
+            "</think>",
+            build_tool_call(true_expr),
+        ]
+    )
+    return "\n".join(lines), candidates
+
+
+def build_assistant_answer(
+    assistant_style: str,
+    template: Template,
+    params: dict[str, float],
+    true_expr: str,
+    function_hints: list[str],
+    data_points: list[list[float]],
+    rng: random.Random,
+    num_hard_negatives: int,
+) -> tuple[str, list[dict]]:
+    if assistant_style == "tool_only":
+        return build_tool_call(true_expr), []
+    if assistant_style == "point_check":
+        return build_point_check_answer(
+            template=template,
+            params=params,
+            true_expr=true_expr,
+            function_hints=function_hints,
+            data_points=data_points,
+            rng=rng,
+            num_hard_negatives=num_hard_negatives,
+        )
+    raise ValueError(f"unknown assistant style: {assistant_style}")
+
+
 def sample_hints(template: Template, rng: random.Random) -> tuple[list[str], list[str]]:
     true_hints = list(template.true_hints)
     if template.difficulty_name == "easy":
@@ -529,6 +724,8 @@ def make_sample(
     min_points: int,
     max_points: int,
     n_test_points: int,
+    assistant_style: str,
+    num_hard_negatives: int,
 ) -> tuple[dict, dict]:
     params = {name: rng.choice(values) for name, values in template.param_choices.items()}
     expr = template.expression_builder(params)
@@ -544,6 +741,16 @@ def make_sample(
 
     true_hints, function_hints = sample_hints(template, rng)
     prompt = build_prompt(function_hints, data_points)
+    assistant_answer, candidate_checks = build_assistant_answer(
+        assistant_style=assistant_style,
+        template=template,
+        params=params,
+        true_expr=expr,
+        function_hints=function_hints,
+        data_points=data_points,
+        rng=rng,
+        num_hard_negatives=num_hard_negatives,
+    )
     expression_str = expr.replace("np.", "")
 
     task_sample = {
@@ -578,6 +785,8 @@ def make_sample(
             "n_test_points": n_test_points,
             "distractor_funcs": [f for f in function_hints if f not in true_hints],
             "full_function_domain": [float(x_range[0]), float(x_range[1])],
+            "assistant_style": assistant_style,
+            "candidate_checks": candidate_checks,
         },
     }
 
@@ -587,6 +796,8 @@ def make_sample(
         "template_id": template.template_id,
         "difficulty_name": template.difficulty_name,
         "expression_numpy": expr,
+        "assistant_style": assistant_style,
+        "candidate_checks": candidate_checks,
         "messages": [
             {
                 "role": "user",
@@ -595,7 +806,7 @@ def make_sample(
                     {"type": "text", "text": prompt},
                 ],
             },
-            {"role": "assistant", "content": build_tool_call(expr)},
+            {"role": "assistant", "content": assistant_answer},
         ],
     }
     return task_sample, sft_sample
@@ -686,6 +897,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-test-points", type=int, default=50)
     parser.add_argument("--val-ratio", type=float, default=0.05)
     parser.add_argument(
+        "--assistant-style",
+        choices=["tool_only", "point_check"],
+        default="tool_only",
+        help=(
+            "Assistant target style. point_check adds short reasoning that "
+            "guesses candidate families from the image/hints, tests hard-negative "
+            "parameter variants on reference points, then calls the tool."
+        ),
+    )
+    parser.add_argument(
+        "--num-hard-negatives",
+        type=int,
+        default=3,
+        help="Number of nearby wrong parameter candidates in point_check targets.",
+    )
+    parser.add_argument(
         "--templates",
         type=str,
         default="",
@@ -707,6 +934,8 @@ def main() -> None:
         raise SystemExit("--samples-per-template must be positive")
     if not 0 <= args.val_ratio < 1:
         raise SystemExit("--val-ratio must be in [0, 1)")
+    if args.num_hard_negatives < 0:
+        raise SystemExit("--num-hard-negatives must be non-negative")
     try:
         template_sample_counts = parse_template_sample_counts(args.template_samples)
     except ValueError as exc:
@@ -742,6 +971,8 @@ def main() -> None:
             min_points=args.min_points,
             max_points=args.max_points,
             n_test_points=args.n_test_points,
+            assistant_style=args.assistant_style,
+            num_hard_negatives=args.num_hard_negatives,
         )
         task_rows.append(task_sample)
         sft_rows.append(sft_sample)
@@ -771,6 +1002,8 @@ def main() -> None:
         "num_val": len(task_val),
         "seed": args.seed,
         "val_ratio": args.val_ratio,
+        "assistant_style": args.assistant_style,
+        "num_hard_negatives": args.num_hard_negatives,
         "template_samples_arg": args.template_samples,
         "num_templates": len(template_counts),
         "templates": sorted(template_counts),

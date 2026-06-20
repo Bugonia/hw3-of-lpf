@@ -47,6 +47,30 @@ The repository also includes `scripts/generate_stage2_targeted_data.sh`, which
 uses the first Stage-1 dev analysis to oversample the weakest templates while
 keeping all 29 families represented.
 
+## Point-Check Reasoning Data
+
+For later stages, the same generator can write assistant targets that include a
+short hard-negative check before the final tool call:
+
+```bash
+python3 scripts/generate_stage1_data.py \
+  --out data/stage5_reasoning \
+  --template-samples 'L2_sin_full=700,L2_cos_full=520,L2_gaussian=520' \
+  --assistant-style point_check \
+  --num-hard-negatives 4 \
+  --overwrite
+```
+
+In this mode the user prompt is unchanged. The assistant target first states the
+candidate family suggested by the image and function hints, then tests nearby
+parameter variants on the provided reference points, for example `sin(3*x)`
+versus `sin(2*x)` or `exp(-1*x**2)` versus `exp(-0.5*x**2)`. The final answer is
+still a `submit_expression` tool call.
+
+Use `scripts/generate_stage5_reasoning_data.sh` for the current hard-negative
+recipe. It focuses families where adjacent frequencies, Gaussian widths, phases,
+offsets, and coefficients are easy to confuse.
+
 ## Covered Families
 
 The generator includes:

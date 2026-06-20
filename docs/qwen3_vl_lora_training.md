@@ -226,3 +226,49 @@ CUDA_VISIBLE_DEVICES=0 python eval.py \
   --tool-call-parser hermes \
   --enforce-eager
 ```
+
+## 11. Stage-5 Point-Check Reasoning Continuation
+
+After the repair run, the remaining errors are often near-miss parameters such
+as adjacent sine/cosine frequencies, Gaussian widths, and coefficients. Stage 5
+changes the SFT target style: the assistant first proposes visually plausible
+candidate expressions, substitutes the provided reference points into each, and
+then submits the zero/lowest-error expression.
+
+Generate the hard-negative reasoning set:
+
+```bash
+python -m pip install -U matplotlib numpy pillow
+bash scripts/generate_stage5_reasoning_data.sh
+```
+
+Continue from the best available adapter. By default this script uses
+`outputs/qwen3_vl_stage4_repair_lora` when present, otherwise it falls back to
+`outputs/qwen3_vl_stage3_lora`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+NPROC_PER_NODE=2 \
+LOAD_IN_4BIT=0 \
+PER_DEVICE_TRAIN_BATCH_SIZE=2 \
+PER_DEVICE_EVAL_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+NUM_TRAIN_EPOCHS=1 \
+LEARNING_RATE=3e-6 \
+SAVE_STRATEGY=no \
+bash scripts/run_stage5_lora.sh
+```
+
+Merge and evaluate:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/merge_stage5_lora.sh
+
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage5_reasoning_merged \
+  --split dev \
+  --tp 1 \
+  --reasoning-parser qwen3 \
+  --tool-call-parser hermes \
+  --enforce-eager
+```
