@@ -19,11 +19,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--adapter",
-        default="/inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_lora",
+        default="/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_lora",
     )
     parser.add_argument(
         "--output-dir",
-        default="/inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_merged",
+        default="/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_merged",
     )
     parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--device-map", default="auto")

@@ -5,8 +5,8 @@ PROJECT_ROOT="${PROJECT_ROOT:-/inspire/hdd/project/generative-large-model/public
 PUBLIC_ROOT="${PUBLIC_ROOT:-/inspire/hdd/project/generative-large-model/public}"
 USER_GLOBAL="${USER_GLOBAL:-/inspire/hdd/global_user/zhongxiaoqiu-253108120179}"
 MODEL_DIR="${MODEL_DIR:-${PUBLIC_ROOT}/models/Qwen3-VL-8B-Instruct}"
-ADAPTER_DIR="${ADAPTER_DIR:-${PUBLIC_ROOT}/outputs/qwen3_vl_stage1_lora}"
-MERGED_DIR="${MERGED_DIR:-${PUBLIC_ROOT}/outputs/qwen3_vl_stage1_merged}"
+ADAPTER_DIR="${ADAPTER_DIR:-${PROJECT_ROOT}/outputs/qwen3_vl_stage1_lora}"
+MERGED_DIR="${MERGED_DIR:-${PROJECT_ROOT}/outputs/qwen3_vl_stage1_merged}"
 
 export HF_HOME="${HF_HOME:-${USER_GLOBAL}/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"

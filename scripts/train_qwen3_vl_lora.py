@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--output-dir",
-        default="/inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_lora",
+        default="/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_lora",
     )
     parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--max-train-samples", type=int, default=None)

@@ -77,7 +77,7 @@ bash scripts/run_stage1_lora.sh
 Default output:
 
 ```text
-/inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_lora
+/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_lora
 ```
 
 The run script defaults to 4-bit LoRA (`LOAD_IN_4BIT=1`) for single-GPU memory
@@ -105,13 +105,13 @@ bash scripts/merge_stage1_lora.sh
 Default merged output:
 
 ```text
-/inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_merged
+/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_merged
 ```
 
 Then run dev evaluation:
 
 ```bash
-python eval.py /inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage1_merged \
+python eval.py /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_merged \
   --split dev \
   --tp 1 \
   --reasoning-parser qwen3 \
@@ -150,7 +150,7 @@ Merge and evaluate:
 CUDA_VISIBLE_DEVICES=0 bash scripts/merge_stage2_lora.sh
 
 CUDA_VISIBLE_DEVICES=0 python eval.py \
-  /inspire/hdd/project/generative-large-model/public/outputs/qwen3_vl_stage2_merged \
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage2_merged \
   --split dev \
   --tp 1 \
   --reasoning-parser qwen3 \
