@@ -296,6 +296,9 @@ def load_model(args: argparse.Namespace):
 
 def build_training_args(args: argparse.Namespace) -> TrainingArguments:
     params = inspect.signature(TrainingArguments.__init__).parameters
+    save_steps = args.save_steps
+    if args.save_strategy == "no":
+        save_steps = 1_000_000_000
     kwargs: dict[str, Any] = {
         "output_dir": args.output_dir,
         "per_device_train_batch_size": args.per_device_train_batch_size,
@@ -307,7 +310,7 @@ def build_training_args(args: argparse.Namespace) -> TrainingArguments:
         "num_train_epochs": args.num_train_epochs,
         "max_steps": args.max_steps,
         "logging_steps": args.logging_steps,
-        "save_steps": args.save_steps,
+        "save_steps": save_steps,
         "eval_steps": args.eval_steps,
         "save_total_limit": args.save_total_limit,
         "bf16": args.bf16,
