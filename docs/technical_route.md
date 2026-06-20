@@ -40,12 +40,20 @@ families. It includes:
 - Chebyshev reference points,
 - hard negatives from nearby parameters,
 - wrong-family candidates,
-- mixed assistant targets: mostly point-check reasoning, plus tool-only samples.
+- mixed assistant targets: mostly point-check reasoning, plus a small tool-only
+  slice.
 
 The generator now also records deterministic `visual_features` computed from
 dense sampling of the true expression. These features are used as training
 scaffolding in the assistant reasoning. They are not extra input at eval time;
 the model must learn to infer them from the image.
+
+Point-check targets should force the model to substitute candidate expressions
+into several reference points and compare predicted y-values against target
+y-values. The accepted expression must be selected by the smallest verified
+`max_abs_error`, not by candidate order. In particular, the correct candidate
+inside the true family should be shuffled among hard negatives so the model
+cannot learn "guess 1 is usually correct."
 
 ### V3: Next Data Upgrade
 

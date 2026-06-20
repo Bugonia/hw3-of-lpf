@@ -17,8 +17,8 @@ Defaults:
 
 - output: `data/sft_v2`
 - 300 samples per template across the 29 synthetic families
-- mixed assistant targets: 20% direct tool-call, 80% multi-family point-check
-- hard negatives and reference-point verification enabled
+- mixed assistant targets: 5% direct tool-call, 95% multi-family point-check
+- hard negatives and explicit reference-point substitution audits enabled
 - deterministic visual-feature labels from dense samples of the true expression
 
 ## Train

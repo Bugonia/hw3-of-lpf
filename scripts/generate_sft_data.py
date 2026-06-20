@@ -472,25 +472,59 @@ def smooth_values(values: np.ndarray) -> np.ndarray:
     if window % 2 == 0:
         window += 1
     kernel = np.ones(window, dtype=np.float64) / window
-    return np.convolve(values, kernel, mode="same")
+    pad = window // 2
+    padded = np.pad(values, pad, mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
+
+
+def local_extrema_locations(
+    x: np.ndarray,
+    y_smooth: np.ndarray,
+    dy: np.ndarray,
+    threshold: float,
+) -> tuple[list[float], list[float]]:
+    maxima_locations: list[float] = []
+    minima_locations: list[float] = []
+    stable = np.zeros_like(dy, dtype=np.int8)
+    stable[dy > threshold] = 1
+    stable[dy < -threshold] = -1
+
+    last_idx = None
+    last_sign = 0
+    for idx, sign in enumerate(stable):
+        if sign == 0:
+            continue
+        if last_idx is not None and sign != last_sign:
+            lo, hi = sorted((last_idx, idx))
+            if hi > lo:
+                segment = y_smooth[lo : hi + 1]
+                if last_sign > 0 and sign < 0:
+                    extremum_idx = lo + int(np.argmax(segment))
+                    maxima_locations.append(float(x[extremum_idx]))
+                elif last_sign < 0 and sign > 0:
+                    extremum_idx = lo + int(np.argmin(segment))
+                    minima_locations.append(float(x[extremum_idx]))
+        last_idx = idx
+        last_sign = int(sign)
+    return maxima_locations, minima_locations
 
 
 def classify_symmetry(expr: str, x_range: tuple[float, float], scale: float) -> dict:
     lo, hi = x_range
     radius = min(abs(lo), abs(hi))
     if lo >= 0 or hi <= 0 or radius < 1e-6:
-        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+        return {"type": "unclear", "even_error": None, "odd_error": None, "assessed": False}
 
     xs = np.linspace(0.0, radius, 512)
     try:
         y_pos = evaluate_expression(expr, xs)
         y_neg = evaluate_expression(expr, -xs)
     except Exception:
-        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+        return {"type": "unclear", "even_error": None, "odd_error": None, "assessed": False}
     if y_pos.shape != xs.shape or y_neg.shape != xs.shape:
-        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+        return {"type": "unclear", "even_error": None, "odd_error": None, "assessed": False}
     if not np.all(np.isfinite(y_pos)) or not np.all(np.isfinite(y_neg)):
-        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+        return {"type": "unclear", "even_error": None, "odd_error": None, "assessed": False}
 
     even_error = float(np.max(np.abs(y_pos - y_neg)) / scale)
     odd_error = float(np.max(np.abs(y_pos + y_neg)) / scale)
@@ -499,13 +533,14 @@ def classify_symmetry(expr: str, x_range: tuple[float, float], scale: float) -> 
     elif odd_error < 0.03:
         symmetry_type = "odd_like"
     elif min(even_error, odd_error) < 0.12:
-        symmetry_type = "weak_symmetry"
+        symmetry_type = "weak"
     else:
-        symmetry_type = "not_obvious"
+        symmetry_type = "unclear"
     return {
         "type": symmetry_type,
         "even_error": round(even_error, 6),
         "odd_error": round(odd_error, 6),
+        "assessed": True,
     }
 
 
@@ -532,12 +567,9 @@ def compute_visual_features(expr: str, x_range: tuple[float, float]) -> dict:
     y_smooth = smooth_values(y)
     dy = np.gradient(y_smooth, x)
     deriv_threshold = max(0.02 * float(np.max(np.abs(dy))), 1e-9)
-    deriv_signs = compress_signs(dy, deriv_threshold)
-    maxima = 0
-    minima = 0
-    if deriv_signs.size >= 2:
-        maxima = int(np.sum((deriv_signs[:-1] > 0) & (deriv_signs[1:] < 0)))
-        minima = int(np.sum((deriv_signs[:-1] < 0) & (deriv_signs[1:] > 0)))
+    maxima_locations, minima_locations = local_extrema_locations(x, y_smooth, dy, deriv_threshold)
+    maxima = len(maxima_locations)
+    minima = len(minima_locations)
     extrema_count = maxima + minima
 
     pos_frac = float(np.mean(dy > deriv_threshold))
@@ -566,35 +598,64 @@ def compute_visual_features(expr: str, x_range: tuple[float, float]) -> dict:
     else:
         amplitude_trend = "flat_or_unclear"
 
-    oscillatory = zero_count >= 4 or extrema_count >= 4
+    oscillatory = zero_count >= 3 or extrema_count >= 4
     changing_frequency = False
     estimated_period = None
-    if len(zero_locations) >= 4:
+    period_evidence = None
+    if len(zero_locations) >= 3:
         intervals = np.diff(np.asarray(zero_locations, dtype=np.float64))
         intervals = intervals[intervals > 1e-6]
         if intervals.size:
             estimated_period = float(2.0 * np.median(intervals))
+            period_evidence = "zero_crossings"
+            if float(np.max(intervals) / max(float(np.min(intervals)), 1e-9)) > 1.45:
+                changing_frequency = True
+    elif extrema_count >= 3:
+        extrema_locations = sorted(maxima_locations + minima_locations)
+        intervals = np.diff(np.asarray(extrema_locations, dtype=np.float64))
+        intervals = intervals[intervals > 1e-6]
+        if intervals.size:
+            estimated_period = float(2.0 * np.median(intervals))
+            period_evidence = "local_extrema"
             if float(np.max(intervals) / max(float(np.min(intervals)), 1e-9)) > 1.45:
                 changing_frequency = True
 
     return {
         "status": "ok",
         "x_range": [float(x_range[0]), float(x_range[1])],
+        "y_range": [round(y_min, 6), round(y_max, 6)],
         "y_min": round(y_min, 6),
         "y_max": round(y_max, 6),
         "y_mean": round(y_mean, 6),
         "zero_crossings": zero_count,
         "zero_crossing_locations": [round(value, 4) for value in zero_locations[:12]],
         "local_maxima": maxima,
+        "local_maxima_locations": [round(value, 4) for value in maxima_locations[:12]],
         "local_minima": minima,
+        "local_minima_locations": [round(value, 4) for value in minima_locations[:12]],
         "local_extrema": extrema_count,
         "monotonicity": monotonicity,
         "oscillatory": oscillatory,
         "estimated_period": round(estimated_period, 6) if estimated_period else None,
+        "period_evidence": period_evidence,
         "changing_frequency": changing_frequency,
         "amplitude_trend": amplitude_trend,
+        "centered_envelope": amplitude_trend == "center_dominant",
+        "amplitude_profile": {
+            "left": round(left_amp, 6),
+            "center": round(mid_amp, 6),
+            "right": round(right_amp, 6),
+        },
         "symmetry": classify_symmetry(expr, x_range, scale),
     }
+
+
+def format_location_list(locations: list[float], limit: int = 6) -> str:
+    shown = locations[:limit]
+    text = ", ".join(fmt_num(value) for value in shown)
+    if len(locations) > limit:
+        text += ", ..."
+    return text
 
 
 def format_visual_feature_lines(features: dict) -> list[str]:
@@ -607,7 +668,7 @@ def format_visual_feature_lines(features: dict) -> list[str]:
         lines.append("The plot appears even-symmetric, which favors cosine/Gaussian/absolute-value style families over a plain sine.")
     elif symmetry_type == "odd_like":
         lines.append("The plot appears odd-symmetric, which favors sine-like or odd polynomial structures.")
-    elif symmetry_type == "weak_symmetry":
+    elif symmetry_type == "weak":
         lines.append("The plot has weak symmetry, so shifted or offset variants should still be checked.")
 
     if features.get("oscillatory"):
@@ -625,6 +686,23 @@ def format_visual_feature_lines(features: dict) -> list[str]:
             f"{features['local_extrema']} local extrema in the shown range."
         )
 
+    zero_locations = features.get("zero_crossing_locations") or []
+    if zero_locations:
+        lines.append(
+            "Rough zero crossings are near "
+            f"x={format_location_list(zero_locations)}, which helps check phase and frequency."
+        )
+
+    maxima_locations = features.get("local_maxima_locations") or []
+    minima_locations = features.get("local_minima_locations") or []
+    if maxima_locations or minima_locations:
+        extrema_parts = []
+        if maxima_locations:
+            extrema_parts.append(f"maxima near x={format_location_list(maxima_locations, limit=4)}")
+        if minima_locations:
+            extrema_parts.append(f"minima near x={format_location_list(minima_locations, limit=4)}")
+        lines.append("Rough turning points place " + "; ".join(extrema_parts) + ".")
+
     monotonicity = features.get("monotonicity")
     if monotonicity == "mostly_increasing":
         lines.append("The curve is mostly increasing, so growth or positive-trend families are plausible.")
@@ -640,7 +718,14 @@ def format_visual_feature_lines(features: dict) -> list[str]:
         lines.append("The curve is strongest near the center, which is consistent with a bump or centered envelope.")
 
     if features.get("changing_frequency"):
-        lines.append("The spacing between crossings is not uniform, so a nonlinear phase such as x**2 should be considered.")
+        lines.append("The spacing between crossings is not uniform, so a nonlinear or modulated phase should be considered.")
+
+    profile = features.get("amplitude_profile") or {}
+    if profile:
+        lines.append(
+            "The left/center/right envelope scale is roughly "
+            f"{fmt_num(profile['left'])}/{fmt_num(profile['center'])}/{fmt_num(profile['right'])}."
+        )
 
     lines.append(
         f"The visible y-range is roughly [{fmt_num(features['y_min'])}, {fmt_num(features['y_max'])}], "
@@ -693,6 +778,46 @@ def candidate_point_error(expr: str, data_points: list[list[float]]) -> float:
     if y_pred.shape != y_true.shape or not np.all(np.isfinite(y_pred)):
         return float("inf")
     return float(np.max(np.abs(y_pred - y_true)))
+
+
+def candidate_reference_checks(
+    expr: str,
+    data_points: list[list[float]],
+    max_points: int,
+) -> list[dict[str, float]]:
+    if max_points <= 0 or not data_points:
+        return []
+    n_points = min(max_points, len(data_points))
+    indices = sorted(set(int(round(value)) for value in np.linspace(0, len(data_points) - 1, n_points)))
+    x = np.asarray([data_points[idx][0] for idx in indices], dtype=np.float64)
+    y_true = np.asarray([data_points[idx][1] for idx in indices], dtype=np.float64)
+    try:
+        y_pred = evaluate_expression(expr, x)
+    except Exception:
+        return []
+    if y_pred.shape != y_true.shape or not np.all(np.isfinite(y_pred)):
+        return []
+    return [
+        {
+            "x": float(x_value),
+            "target": float(target),
+            "predicted": float(predicted),
+            "abs_error": float(abs(predicted - target)),
+        }
+        for x_value, target, predicted in zip(x, y_true, y_pred)
+    ]
+
+
+def format_reference_checks(checks: list[dict[str, float]]) -> str:
+    if not checks:
+        return "point substitution is invalid."
+    parts = []
+    for check in checks:
+        parts.append(
+            f"x={fmt_num(check['x'])}: pred={fmt_num(check['predicted'])}, "
+            f"target={fmt_num(check['target'])}, err={format_point_error(check['abs_error'])}"
+        )
+    return "; ".join(parts) + "."
 
 
 def nearby_param_values(values: list[float], current: float) -> list[float]:
@@ -948,6 +1073,7 @@ def build_candidate_family_rounds(
         "max_abs_error": candidate_point_error(true_expr, data_points),
     }
     true_candidates = [true_candidate] + hard_negatives
+    rng.shuffle(true_candidates)
     rounds.append(
         {
             "template_id": true_template.template_id,
@@ -976,6 +1102,7 @@ def build_point_check_answer(
     num_candidate_families: int,
     max_family_param_guesses: int,
     accept_max_abs_error: float,
+    num_verification_points: int,
 ) -> tuple[str, list[dict]]:
     family_rounds = build_candidate_family_rounds(
         all_templates=all_templates,
@@ -998,6 +1125,10 @@ def build_point_check_answer(
         f"The image and hints ({hint_text}) suggest several possible families, so I first use the plot for coarse structure.",
         *format_visual_feature_lines(visual_features),
         "These visual properties narrow the candidate families, but the reference points decide the parameters.",
+        (
+            "For each family I must substitute candidate expressions into reference points, "
+            "compare predicted y against target y, and select by the smallest max_abs_error rather than by guess order."
+        ),
         f"Stopping rule: keep changing families while every candidate has max_abs_error above {threshold_text}.",
     ]
     accepted_round = None
@@ -1006,6 +1137,8 @@ def build_point_check_answer(
             f"Family {round_idx}: {family_round['family_description']} "
             f"({family_round['template_id']})."
         )
+        best_candidate = min(family_round["candidates"], key=lambda item: item["max_abs_error"])
+        best_candidate_idx = 1 + family_round["candidates"].index(best_candidate)
         for candidate_idx, candidate in enumerate(family_round["candidates"], start=1):
             change = ""
             if candidate.get("changed_param") is not None:
@@ -1018,8 +1151,20 @@ def build_point_check_answer(
                 f"{candidate['expression']}{change}; "
                 f"max_abs_error={format_point_error(candidate['max_abs_error'])}."
             )
+        checks = candidate_reference_checks(
+            best_candidate["expression"],
+            data_points,
+            num_verification_points,
+        )
+        lines.append(
+            f"  Reference-point audit for current best guess {best_candidate_idx}: "
+            f"{format_reference_checks(checks)}"
+        )
         if family_round["best_error"] <= accept_max_abs_error:
-            lines.append("  This family has a tiny reference-point error, so I stop searching.")
+            lines.append(
+                f"  Guess {best_candidate_idx} has a tiny reference-point error, "
+                "so I stop searching and use that verified expression."
+            )
             accepted_round = family_round
             break
         lines.append("  All guesses in this family are still too far off, so I switch families.")
@@ -1029,7 +1174,7 @@ def build_point_check_answer(
 
     lines.extend(
         [
-            f"The expression with the smallest point error is {true_expr}, so I submit it.",
+            f"After reference-point substitution, the expression with the smallest point error is {true_expr}, so I submit it.",
             "</think>",
             build_tool_call(true_expr),
         ]
@@ -1051,6 +1196,7 @@ def build_assistant_answer(
     num_candidate_families: int,
     max_family_param_guesses: int,
     accept_max_abs_error: float,
+    num_verification_points: int,
 ) -> tuple[str, list[dict]]:
     if assistant_style == "tool_only":
         return build_tool_call(true_expr), []
@@ -1068,6 +1214,7 @@ def build_assistant_answer(
             num_candidate_families=num_candidate_families,
             max_family_param_guesses=max_family_param_guesses,
             accept_max_abs_error=accept_max_abs_error,
+            num_verification_points=num_verification_points,
         )
     raise ValueError(f"unknown assistant style: {assistant_style}")
 
@@ -1162,6 +1309,7 @@ def make_sample(
     num_candidate_families: int,
     max_family_param_guesses: int,
     accept_max_abs_error: float,
+    num_verification_points: int,
     tool_only_ratio: float,
 ) -> tuple[dict, dict]:
     params = {name: rng.choice(values) for name, values in template.param_choices.items()}
@@ -1196,6 +1344,7 @@ def make_sample(
         num_candidate_families=num_candidate_families,
         max_family_param_guesses=max_family_param_guesses,
         accept_max_abs_error=accept_max_abs_error,
+        num_verification_points=num_verification_points,
     )
     expression_str = expr.replace("np.", "")
 
@@ -1237,6 +1386,7 @@ def make_sample(
             "num_candidate_families": num_candidate_families,
             "max_family_param_guesses": max_family_param_guesses,
             "accept_max_abs_error": accept_max_abs_error,
+            "num_verification_points": num_verification_points,
             "candidate_checks": candidate_checks,
         },
     }
@@ -1251,6 +1401,7 @@ def make_sample(
         "effective_assistant_style": effective_assistant_style,
         "num_candidate_families": num_candidate_families,
         "accept_max_abs_error": accept_max_abs_error,
+        "num_verification_points": num_verification_points,
         "visual_features": visual_features,
         "candidate_checks": candidate_checks,
         "messages": [
@@ -1393,6 +1544,12 @@ def parse_args() -> argparse.Namespace:
         help="Reference-point max absolute error threshold for accepting a candidate family.",
     )
     parser.add_argument(
+        "--num-verification-points",
+        type=int,
+        default=4,
+        help="Number of reference points to show in the assistant's explicit substitution audit.",
+    )
+    parser.add_argument(
         "--templates",
         type=str,
         default="",
@@ -1424,6 +1581,8 @@ def main() -> None:
         raise SystemExit("--max-family-param-guesses must be positive")
     if args.accept_max_abs_error <= 0:
         raise SystemExit("--accept-max-abs-error must be positive")
+    if args.num_verification_points < 1:
+        raise SystemExit("--num-verification-points must be positive")
     try:
         template_sample_counts = parse_template_sample_counts(args.template_samples)
     except ValueError as exc:
@@ -1465,6 +1624,7 @@ def main() -> None:
             num_candidate_families=args.num_candidate_families,
             max_family_param_guesses=args.max_family_param_guesses,
             accept_max_abs_error=args.accept_max_abs_error,
+            num_verification_points=args.num_verification_points,
             tool_only_ratio=args.tool_only_ratio,
         )
         task_rows.append(task_sample)
@@ -1501,6 +1661,7 @@ def main() -> None:
         "num_candidate_families": args.num_candidate_families,
         "max_family_param_guesses": args.max_family_param_guesses,
         "accept_max_abs_error": args.accept_max_abs_error,
+        "num_verification_points": args.num_verification_points,
         "template_samples_arg": args.template_samples,
         "num_templates": len(template_counts),
         "templates": sorted(template_counts),

@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+try:
+    from generate_sft_data import compute_visual_features
+except Exception:
+    compute_visual_features = None
+
+
 R2_THRESHOLDS = (0.99, 0.95, 0.90, 0.80)
 FUNC_RE = re.compile(r"np\.([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -53,6 +59,22 @@ def short(text: str | None, limit: int = 76) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+def r2_bucket(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "null"
+    if value >= 0.99:
+        return ">=0.99"
+    if value >= 0.95:
+        return "0.95-0.99"
+    if value >= 0.90:
+        return "0.90-0.95"
+    if value >= 0.80:
+        return "0.80-0.90"
+    if value >= 0.0:
+        return "0.00-0.80"
+    return "<0.00"
+
+
 def median(values: list[float]) -> float | None:
     return statistics.median(values) if values else None
 
@@ -61,14 +83,35 @@ def mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def get_visual_features(sample_id: str, sample: dict[str, Any], true_expr: str | None, cache: dict[str, dict]) -> dict:
+    if sample_id in cache:
+        return cache[sample_id]
+    features: dict[str, Any] = {"status": "unavailable"}
+    if compute_visual_features is None:
+        cache[sample_id] = features
+        return features
+    x_range = sample.get("image_x_range")
+    if true_expr and isinstance(x_range, list) and len(x_range) == 2:
+        try:
+            features = compute_visual_features(true_expr, (float(x_range[0]), float(x_range[1])))
+        except Exception as exc:
+            features = {"status": "error", "error": str(exc)}
+    cache[sample_id] = features
+    return features
+
+
 def enrich_results(results: list[dict[str, Any]], samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
     sample_by_id = {row["id"]: row for row in samples}
+    visual_cache: dict[str, dict] = {}
     enriched: list[dict[str, Any]] = []
     for result in results:
-        sample = sample_by_id.get(result.get("id"), {})
+        sample_id = str(result.get("id", ""))
+        sample = sample_by_id.get(sample_id, {})
         config = sample.get("generation_config") or {}
         true_expr = result.get("true_expr") or sample.get("expression_numpy")
         pred_expr = result.get("predicted_expr")
+        visual_features = get_visual_features(sample_id, sample, true_expr, visual_cache)
+        symmetry = visual_features.get("symmetry") or {}
         row = {
             **result,
             "difficulty_name": sample.get("difficulty_name", "unknown"),
@@ -83,6 +126,16 @@ def enrich_results(results: list[dict[str, Any]], samples: list[dict[str, Any]])
             "image_x_range": sample.get("image_x_range"),
             "true_expr": true_expr,
             "predicted_expr": pred_expr,
+            "r2_bucket": r2_bucket(result.get("r2")),
+            "visual_status": visual_features.get("status", "unknown"),
+            "visual_symmetry": symmetry.get("type", "unknown"),
+            "visual_zero_crossings": visual_features.get("zero_crossings", "unknown"),
+            "visual_local_extrema": visual_features.get("local_extrema", "unknown"),
+            "visual_monotonicity": visual_features.get("monotonicity", "unknown"),
+            "visual_oscillatory": str(visual_features.get("oscillatory", "unknown")),
+            "visual_estimated_period": visual_features.get("estimated_period"),
+            "visual_changing_frequency": str(visual_features.get("changing_frequency", "unknown")),
+            "visual_amplitude_trend": visual_features.get("amplitude_trend", "unknown"),
         }
         enriched.append(row)
     return enriched
@@ -159,6 +212,13 @@ def export_worst(rows: list[dict[str, Any]], path: Path, limit: int) -> None:
         "hint_funcs",
         "n_text_points",
         "n_distractors",
+        "r2_bucket",
+        "visual_symmetry",
+        "visual_oscillatory",
+        "visual_changing_frequency",
+        "visual_amplitude_trend",
+        "visual_zero_crossings",
+        "visual_local_extrema",
         "true_expr",
         "predicted_expr",
     ]
@@ -238,6 +298,12 @@ def main() -> None:
     print_table("By True Function Set", rows, lambda row: str(row["true_funcs"]), min_count=3)
     print_table("By Hint Function Set", rows, lambda row: str(row["hint_funcs"]), min_count=3)
     print_table("By Number Of Distractors", rows, lambda row: str(row["n_distractors"]))
+    print_table("By R2 Bucket", rows, lambda row: str(row["r2_bucket"]))
+    print_table("By Visual Symmetry", rows, lambda row: str(row["visual_symmetry"]))
+    print_table("By Visual Oscillation", rows, lambda row: str(row["visual_oscillatory"]))
+    print_table("By Visual Changing Frequency", rows, lambda row: str(row["visual_changing_frequency"]))
+    print_table("By Visual Amplitude Trend", rows, lambda row: str(row["visual_amplitude_trend"]))
+    print_table("By Visual Monotonicity", rows, lambda row: str(row["visual_monotonicity"]))
     print_worst(rows, args.worst_limit)
 
     if args.csv_out is not None:

@@ -31,11 +31,12 @@ GEN_ARGS=(
   --n-test-points "${N_TEST_POINTS:-50}"
   --val-ratio "${VAL_RATIO:-0.04}"
   --assistant-style "${ASSISTANT_STYLE:-mixed}"
-  --tool-only-ratio "${TOOL_ONLY_RATIO:-0.2}"
+  --tool-only-ratio "${TOOL_ONLY_RATIO:-0.05}"
   --num-hard-negatives "${NUM_HARD_NEGATIVES:-4}"
   --num-candidate-families "${NUM_CANDIDATE_FAMILIES:-3}"
   --max-family-param-guesses "${MAX_FAMILY_PARAM_GUESSES:-512}"
   --accept-max-abs-error "${ACCEPT_MAX_ABS_ERROR:-1e-4}"
+  --num-verification-points "${NUM_VERIFICATION_POINTS:-4}"
   --overwrite
 )
 

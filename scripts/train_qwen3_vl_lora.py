@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LoRA/QLoRA SFT for Qwen3-VL on the stage-1 symbolic-regression data."""
+"""LoRA/QLoRA SFT for Qwen3-VL on symbolic-regression SFT data."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=None)
     parser.add_argument(
         "--output-dir",
-        default="/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage1_lora",
+        default="/inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_sft_lora",
     )
     parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--max-train-samples", type=int, default=None)
@@ -68,8 +68,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--dataloader-num-workers", type=int, default=0)
 
-    parser.add_argument("--lora-r", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--lora-r", type=int, default=32)
+    parser.add_argument("--lora-alpha", type=int, default=64)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument(
         "--adapter-name-or-path",
@@ -78,10 +78,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--lora-target-modules",
-        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,qkv,proj,fc1,fc2",
         help="Comma-separated PEFT target module suffixes.",
     )
-    parser.add_argument("--freeze-vision-lora", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--freeze-vision-lora", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=False)
@@ -228,6 +228,38 @@ def from_pretrained_with_dtype(model_cls: Any, model_path: str, kwargs: dict[str
         return model_cls.from_pretrained(model_path, **fallback_kwargs)
 
 
+def is_vision_parameter(name: str) -> bool:
+    name_l = name.lower()
+    return any(marker in name_l for marker in VISION_NAME_MARKERS)
+
+
+def print_lora_parameter_summary(model: torch.nn.Module) -> None:
+    trainable_lora = 0
+    trainable_vision_lora = 0
+    frozen_vision_lora = 0
+    for name, param in model.named_parameters():
+        if "lora_" not in name.lower():
+            continue
+        if param.requires_grad:
+            trainable_lora += param.numel()
+            if is_vision_parameter(name):
+                trainable_vision_lora += param.numel()
+        elif is_vision_parameter(name):
+            frozen_vision_lora += param.numel()
+
+    print(
+        "LoRA parameter summary: "
+        f"trainable_total={trainable_lora:,}, "
+        f"trainable_vision={trainable_vision_lora:,}, "
+        f"frozen_vision={frozen_vision_lora:,}"
+    )
+    if trainable_vision_lora == 0:
+        print(
+            "WARNING: no trainable vision-side LoRA parameters were found. "
+            "Check --lora-target-modules against the Qwen3-VL vision module names."
+        )
+
+
 def load_model(args: argparse.Namespace):
     model_cls = import_qwen3_vl_model_class()
     model_kwargs: dict[str, Any] = {
@@ -283,13 +315,13 @@ def load_model(args: argparse.Namespace):
     if args.freeze_vision_lora:
         frozen = 0
         for name, param in model.named_parameters():
-            name_l = name.lower()
-            if "lora_" in name_l and any(marker in name_l for marker in VISION_NAME_MARKERS):
+            if "lora_" in name.lower() and is_vision_parameter(name):
                 param.requires_grad = False
                 frozen += param.numel()
         if frozen:
             print(f"Froze {frozen:,} vision-side LoRA parameters")
 
+    print_lora_parameter_summary(model)
     model.print_trainable_parameters()
     return model
 
