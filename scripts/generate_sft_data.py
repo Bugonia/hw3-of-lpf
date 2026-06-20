@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate stage-1 symbolic-regression SFT data.
+"""Generate symbolic-regression SFT data.
 
 The generator mirrors the released dev distribution: each sample contains a
 curve image, function hints with distractors, Chebyshev-sampled reference
 points, the ground-truth numpy expression, and an assistant tool-call answer.
+It also computes deterministic visual-structure labels from dense samples of
+the true expression and uses them as reasoning scaffolding.
 """
 
 from __future__ import annotations
@@ -422,6 +424,231 @@ def render_plot(expr: str, x_range: tuple[float, float], image_path: Path) -> No
     plt.close(fig)
 
 
+def compress_signs(values: np.ndarray, threshold: float) -> np.ndarray:
+    signs = np.zeros_like(values, dtype=np.int8)
+    signs[values > threshold] = 1
+    signs[values < -threshold] = -1
+    signs = signs[signs != 0]
+    if signs.size == 0:
+        return signs
+    keep = np.concatenate([[True], signs[1:] != signs[:-1]])
+    return signs[keep]
+
+
+def count_sign_crossings(values: np.ndarray, threshold: float) -> int:
+    signs = compress_signs(values, threshold)
+    if signs.size < 2:
+        return 0
+    return int(np.sum(signs[1:] * signs[:-1] < 0))
+
+
+def zero_crossing_locations(x: np.ndarray, y: np.ndarray, threshold: float) -> list[float]:
+    locations: list[float] = []
+    stable = np.zeros_like(y, dtype=np.int8)
+    stable[y > threshold] = 1
+    stable[y < -threshold] = -1
+    last_idx = None
+    last_sign = 0
+    for idx, sign in enumerate(stable):
+        if sign == 0:
+            continue
+        if last_idx is not None and sign != last_sign:
+            x0, x1 = x[last_idx], x[idx]
+            y0, y1 = y[last_idx], y[idx]
+            if abs(y1 - y0) > 1e-12:
+                loc = float(x0 - y0 * (x1 - x0) / (y1 - y0))
+            else:
+                loc = float((x0 + x1) / 2)
+            locations.append(loc)
+        last_idx = idx
+        last_sign = int(sign)
+    return locations
+
+
+def smooth_values(values: np.ndarray) -> np.ndarray:
+    if values.size < 9:
+        return values
+    window = min(31, max(5, (values.size // 200) * 2 + 1))
+    if window % 2 == 0:
+        window += 1
+    kernel = np.ones(window, dtype=np.float64) / window
+    return np.convolve(values, kernel, mode="same")
+
+
+def classify_symmetry(expr: str, x_range: tuple[float, float], scale: float) -> dict:
+    lo, hi = x_range
+    radius = min(abs(lo), abs(hi))
+    if lo >= 0 or hi <= 0 or radius < 1e-6:
+        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+
+    xs = np.linspace(0.0, radius, 512)
+    try:
+        y_pos = evaluate_expression(expr, xs)
+        y_neg = evaluate_expression(expr, -xs)
+    except Exception:
+        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+    if y_pos.shape != xs.shape or y_neg.shape != xs.shape:
+        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+    if not np.all(np.isfinite(y_pos)) or not np.all(np.isfinite(y_neg)):
+        return {"type": "not_assessed", "even_error": None, "odd_error": None}
+
+    even_error = float(np.max(np.abs(y_pos - y_neg)) / scale)
+    odd_error = float(np.max(np.abs(y_pos + y_neg)) / scale)
+    if even_error < 0.03:
+        symmetry_type = "even_like"
+    elif odd_error < 0.03:
+        symmetry_type = "odd_like"
+    elif min(even_error, odd_error) < 0.12:
+        symmetry_type = "weak_symmetry"
+    else:
+        symmetry_type = "not_obvious"
+    return {
+        "type": symmetry_type,
+        "even_error": round(even_error, 6),
+        "odd_error": round(odd_error, 6),
+    }
+
+
+def compute_visual_features(expr: str, x_range: tuple[float, float]) -> dict:
+    x = np.linspace(x_range[0], x_range[1], 2048)
+    y = evaluate_expression(expr, x)
+    finite = np.isfinite(y)
+    if y.shape != x.shape or not finite.any():
+        return {"status": "invalid"}
+
+    x = x[finite]
+    y = y[finite]
+    y_min = float(np.min(y))
+    y_max = float(np.max(y))
+    y_mean = float(np.mean(y))
+    y_median = float(np.median(y))
+    span = max(y_max - y_min, 1e-9)
+    scale = max(span, float(np.max(np.abs(y))), 1.0)
+
+    zero_threshold = max(0.01 * scale, 1e-7)
+    zero_locations = zero_crossing_locations(x, y, zero_threshold)
+    zero_count = len(zero_locations)
+
+    y_smooth = smooth_values(y)
+    dy = np.gradient(y_smooth, x)
+    deriv_threshold = max(0.02 * float(np.max(np.abs(dy))), 1e-9)
+    deriv_signs = compress_signs(dy, deriv_threshold)
+    maxima = 0
+    minima = 0
+    if deriv_signs.size >= 2:
+        maxima = int(np.sum((deriv_signs[:-1] > 0) & (deriv_signs[1:] < 0)))
+        minima = int(np.sum((deriv_signs[:-1] < 0) & (deriv_signs[1:] > 0)))
+    extrema_count = maxima + minima
+
+    pos_frac = float(np.mean(dy > deriv_threshold))
+    neg_frac = float(np.mean(dy < -deriv_threshold))
+    if pos_frac > 0.88:
+        monotonicity = "mostly_increasing"
+    elif neg_frac > 0.88:
+        monotonicity = "mostly_decreasing"
+    elif pos_frac + neg_frac < 0.25:
+        monotonicity = "nearly_flat"
+    else:
+        monotonicity = "mixed"
+
+    centered_abs = np.abs(y - y_median)
+    n = centered_abs.size
+    left_amp = float(np.percentile(centered_abs[: max(1, n // 4)], 95))
+    mid_amp = float(np.percentile(centered_abs[n // 3 : max(n // 3 + 1, 2 * n // 3)], 95))
+    right_amp = float(np.percentile(centered_abs[max(0, 3 * n // 4) :], 95))
+    amp_floor = max(0.04 * scale, 1e-7)
+    if left_amp > max(right_amp * 1.5, amp_floor):
+        amplitude_trend = "decays_left_to_right"
+    elif right_amp > max(left_amp * 1.5, amp_floor):
+        amplitude_trend = "grows_left_to_right"
+    elif mid_amp > max(left_amp, right_amp, amp_floor) * 1.35:
+        amplitude_trend = "center_dominant"
+    else:
+        amplitude_trend = "flat_or_unclear"
+
+    oscillatory = zero_count >= 4 or extrema_count >= 4
+    changing_frequency = False
+    estimated_period = None
+    if len(zero_locations) >= 4:
+        intervals = np.diff(np.asarray(zero_locations, dtype=np.float64))
+        intervals = intervals[intervals > 1e-6]
+        if intervals.size:
+            estimated_period = float(2.0 * np.median(intervals))
+            if float(np.max(intervals) / max(float(np.min(intervals)), 1e-9)) > 1.45:
+                changing_frequency = True
+
+    return {
+        "status": "ok",
+        "x_range": [float(x_range[0]), float(x_range[1])],
+        "y_min": round(y_min, 6),
+        "y_max": round(y_max, 6),
+        "y_mean": round(y_mean, 6),
+        "zero_crossings": zero_count,
+        "zero_crossing_locations": [round(value, 4) for value in zero_locations[:12]],
+        "local_maxima": maxima,
+        "local_minima": minima,
+        "local_extrema": extrema_count,
+        "monotonicity": monotonicity,
+        "oscillatory": oscillatory,
+        "estimated_period": round(estimated_period, 6) if estimated_period else None,
+        "changing_frequency": changing_frequency,
+        "amplitude_trend": amplitude_trend,
+        "symmetry": classify_symmetry(expr, x_range, scale),
+    }
+
+
+def format_visual_feature_lines(features: dict) -> list[str]:
+    if features.get("status") != "ok":
+        return ["The plot should be used for coarse family selection, while the reference points decide parameters."]
+
+    lines: list[str] = []
+    symmetry_type = features.get("symmetry", {}).get("type")
+    if symmetry_type == "even_like":
+        lines.append("The plot appears even-symmetric, which favors cosine/Gaussian/absolute-value style families over a plain sine.")
+    elif symmetry_type == "odd_like":
+        lines.append("The plot appears odd-symmetric, which favors sine-like or odd polynomial structures.")
+    elif symmetry_type == "weak_symmetry":
+        lines.append("The plot has weak symmetry, so shifted or offset variants should still be checked.")
+
+    if features.get("oscillatory"):
+        period = features.get("estimated_period")
+        period_text = f" with a rough period near {fmt_num(period)}" if period else ""
+        lines.append(
+            f"The plot is oscillatory{period_text}; it has about "
+            f"{features['zero_crossings']} zero crossings and "
+            f"{features['local_extrema']} local extrema in the shown range."
+        )
+    else:
+        lines.append(
+            f"The plot is not strongly oscillatory; it has about "
+            f"{features['zero_crossings']} zero crossings and "
+            f"{features['local_extrema']} local extrema in the shown range."
+        )
+
+    monotonicity = features.get("monotonicity")
+    if monotonicity == "mostly_increasing":
+        lines.append("The curve is mostly increasing, so growth or positive-trend families are plausible.")
+    elif monotonicity == "mostly_decreasing":
+        lines.append("The curve is mostly decreasing, so decay or negative-trend families are plausible.")
+
+    amplitude_trend = features.get("amplitude_trend")
+    if amplitude_trend == "decays_left_to_right":
+        lines.append("The visible amplitude decreases from left to right, which suggests a damping factor.")
+    elif amplitude_trend == "grows_left_to_right":
+        lines.append("The visible amplitude grows from left to right, which suggests growth or an increasing envelope.")
+    elif amplitude_trend == "center_dominant":
+        lines.append("The curve is strongest near the center, which is consistent with a bump or centered envelope.")
+
+    if features.get("changing_frequency"):
+        lines.append("The spacing between crossings is not uniform, so a nonlinear phase such as x**2 should be considered.")
+
+    lines.append(
+        f"The visible y-range is roughly [{fmt_num(features['y_min'])}, {fmt_num(features['y_max'])}], "
+        "so amplitude and offset guesses must respect that scale."
+    )
+    return lines
+
+
 def build_prompt(function_hints: list[str], data_points: list[list[float]]) -> str:
     hints_text = (
         "Available functions: " + ", ".join(function_hints) + "\n"
@@ -743,6 +970,7 @@ def build_point_check_answer(
     true_expr: str,
     function_hints: list[str],
     data_points: list[list[float]],
+    visual_features: dict,
     rng: random.Random,
     num_hard_negatives: int,
     num_candidate_families: int,
@@ -767,7 +995,9 @@ def build_point_check_answer(
 
     lines = [
         "<think>",
-        f"The image and hints ({hint_text}) suggest several possible families, so I will test them in order.",
+        f"The image and hints ({hint_text}) suggest several possible families, so I first use the plot for coarse structure.",
+        *format_visual_feature_lines(visual_features),
+        "These visual properties narrow the candidate families, but the reference points decide the parameters.",
         f"Stopping rule: keep changing families while every candidate has max_abs_error above {threshold_text}.",
     ]
     accepted_round = None
@@ -815,6 +1045,7 @@ def build_assistant_answer(
     true_expr: str,
     function_hints: list[str],
     data_points: list[list[float]],
+    visual_features: dict,
     rng: random.Random,
     num_hard_negatives: int,
     num_candidate_families: int,
@@ -831,6 +1062,7 @@ def build_assistant_answer(
             true_expr=true_expr,
             function_hints=function_hints,
             data_points=data_points,
+            visual_features=visual_features,
             rng=rng,
             num_hard_negatives=num_hard_negatives,
             num_candidate_families=num_candidate_families,
@@ -943,6 +1175,7 @@ def make_sample(
     data_points = make_data_points(expr, x_range, n_points)
     test_points = make_test_points(expr, x_range, n_test_points)
     render_plot(expr, x_range, image_abs)
+    visual_features = compute_visual_features(expr, x_range)
 
     true_hints, function_hints = sample_hints(template, rng)
     prompt = build_prompt(function_hints, data_points)
@@ -957,6 +1190,7 @@ def make_sample(
         true_expr=expr,
         function_hints=function_hints,
         data_points=data_points,
+        visual_features=visual_features,
         rng=rng,
         num_hard_negatives=num_hard_negatives,
         num_candidate_families=num_candidate_families,
@@ -992,6 +1226,7 @@ def make_sample(
         "generation_config": {
             "template_id": template.template_id,
             "sampled_params": params,
+            "visual_features": visual_features,
             "x_sample_method": "chebyshev",
             "n_data_points_total": len(data_points),
             "n_test_points": n_test_points,
@@ -1016,6 +1251,7 @@ def make_sample(
         "effective_assistant_style": effective_assistant_style,
         "num_candidate_families": num_candidate_families,
         "accept_max_abs_error": accept_max_abs_error,
+        "visual_features": visual_features,
         "candidate_checks": candidate_checks,
         "messages": [
             {
@@ -1092,7 +1328,7 @@ def parse_template_sample_counts(spec: str) -> dict[str, int] | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate stage-1 SFT data")
+    parser = argparse.ArgumentParser(description="Generate symbolic-regression SFT data")
     parser.add_argument("--out", type=Path, default=Path("data/sft_v2"))
     parser.add_argument("--num-samples", type=int, default=2900)
     parser.add_argument(

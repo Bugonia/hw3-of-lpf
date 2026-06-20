@@ -134,4 +134,6 @@ bash scripts/run_lora_sft.sh
 bash scripts/merge_lora.sh
 ```
 
-完整方案说明见 `docs/clean_workflow.md`；新开对话的上下文提示词见 `docs/new_conversation_prompt.md`。
+核心技术路线见 `docs/technical_route.md`；完整命令说明见 `docs/clean_workflow.md`；新开对话的上下文提示词见 `docs/new_conversation_prompt.md`。
+
+当前主线不是把任务做成 29 类模板分类，而是训练模型形成稳定的符号回归流程：先用图像判断周期性、对称性、零点/极值、包络和趋势等粗结构，再生成多个候选函数族与参数，最后用 Reference points 做数值代入检验，误差足够小才提交 tool call。

@@ -3,6 +3,10 @@
 This repo keeps only the release data, generic data generation, generic LoRA
 training, merge, and evaluation-analysis utilities.
 
+The project route is documented in `docs/technical_route.md`. In short: the
+image is used to infer coarse visual structure, while reference points are used
+to verify parameters and reject candidate expressions.
+
 ## Generate Data
 
 ```bash
@@ -15,6 +19,7 @@ Defaults:
 - 300 samples per template across the 29 synthetic families
 - mixed assistant targets: 20% direct tool-call, 80% multi-family point-check
 - hard negatives and reference-point verification enabled
+- deterministic visual-feature labels from dense samples of the true expression
 
 ## Train
 
@@ -60,3 +65,7 @@ python scripts/analyze_eval_results.py \
   eval_outputs/qwen3_vl_sft_merged/eval_results_dev.jsonl \
   --csv-out eval_outputs/qwen3_vl_sft_merged/worst_dev.csv
 ```
+
+Use the analysis to decide the next data upgrade. The preferred next step is not
+another ad hoc stage script, but a new versioned data generator that adds grammar
+generalization, verified hard negatives, and failure-mode repair data.
