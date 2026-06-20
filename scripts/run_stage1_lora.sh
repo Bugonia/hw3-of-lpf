@@ -53,6 +53,7 @@ TRAIN_ARGS=(
   --logging-steps "${LOGGING_STEPS:-10}"
   --eval-steps "${EVAL_STEPS:-100}"
   --save-steps "${SAVE_STEPS:-100}"
+  --save-strategy "${SAVE_STRATEGY:-steps}"
   --save-total-limit "${SAVE_TOTAL_LIMIT:-2}"
   --lora-r "${LORA_R:-16}"
   --lora-alpha "${LORA_ALPHA:-32}"

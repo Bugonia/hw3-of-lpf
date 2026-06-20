@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--save-steps", type=int, default=100)
+    parser.add_argument("--save-strategy", default="steps", choices=["steps", "epoch", "no"])
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--dataloader-num-workers", type=int, default=0)
 
@@ -317,6 +318,8 @@ def build_training_args(args: argparse.Namespace) -> TrainingArguments:
         "dataloader_num_workers": args.dataloader_num_workers,
         "gradient_checkpointing": args.gradient_checkpointing,
     }
+    if "save_strategy" in params:
+        kwargs["save_strategy"] = args.save_strategy
     if "save_safetensors" in params:
         kwargs["save_safetensors"] = True
     if "eval_strategy" in params:

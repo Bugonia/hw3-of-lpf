@@ -14,6 +14,7 @@ export DATA_ROOT="${DATA_ROOT:-data/stage3_balanced}"
 export LEARNING_RATE="${LEARNING_RATE:-2e-5}"
 export NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-1}"
 export SAVE_STEPS="${SAVE_STEPS:-200}"
+export SAVE_STRATEGY="${SAVE_STRATEGY:-no}"
 export EVAL_STEPS="${EVAL_STEPS:-200}"
 export SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 

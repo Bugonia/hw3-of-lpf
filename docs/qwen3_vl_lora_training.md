@@ -209,6 +209,10 @@ LEARNING_RATE=2e-5 \
 bash scripts/run_stage3_lora.sh
 ```
 
+Stage 3 defaults to `SAVE_STRATEGY=no`, so it skips intermediate checkpoints and
+only writes the final adapter at the end. This avoids filling the shared project
+quota during continuation runs.
+
 Merge and evaluate:
 
 ```bash
