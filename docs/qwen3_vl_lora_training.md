@@ -179,3 +179,46 @@ copy them into the project directory with:
 ```bash
 bash scripts/migrate_outputs_to_project.sh
 ```
+
+## 10. Stage-3 Conservative Continuation
+
+Stage 2 improved dev `acc@0.99` from `42.0%` to `58.3%`, fixing 62 samples
+while regressing 13. Stage 3 targets the remaining low-score templates
+(`L3_beat`, `L5_exp_sin_sq`, `L1_poly`, `L5_sqrt_chirp_poly`,
+`L5_fm_signal`, `L4_sqrt_cos_sq`) and rehearses the regression-prone templates
+(`L3_damped_osc`, `L4_exp_chirp`, `L4_log_sin`, `L2_sin_full`).
+
+Generate data:
+
+```bash
+python -m pip install -U matplotlib numpy pillow
+bash scripts/generate_stage3_balanced_data.sh
+```
+
+Continue from Stage 2 with a lower learning rate:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+NPROC_PER_NODE=4 \
+LOAD_IN_4BIT=0 \
+PER_DEVICE_TRAIN_BATCH_SIZE=1 \
+PER_DEVICE_EVAL_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+NUM_TRAIN_EPOCHS=1 \
+LEARNING_RATE=2e-5 \
+bash scripts/run_stage3_lora.sh
+```
+
+Merge and evaluate:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/merge_stage3_lora.sh
+
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/outputs/qwen3_vl_stage3_merged \
+  --split dev \
+  --tp 1 \
+  --reasoning-parser qwen3 \
+  --tool-call-parser hermes \
+  --enforce-eager
+```
