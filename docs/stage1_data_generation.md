@@ -58,14 +58,24 @@ python3 scripts/generate_stage1_data.py \
   --template-samples 'L2_sin_full=700,L2_cos_full=520,L2_gaussian=520' \
   --assistant-style point_check \
   --num-hard-negatives 4 \
+  --num-candidate-families 3 \
+  --max-family-param-guesses 512 \
+  --accept-max-abs-error 1e-4 \
   --overwrite
 ```
 
 In this mode the user prompt is unchanged. The assistant target first states the
-candidate family suggested by the image and function hints, then tests nearby
-parameter variants on the provided reference points, for example `sin(3*x)`
-versus `sin(2*x)` or `exp(-1*x**2)` versus `exp(-0.5*x**2)`. The final answer is
-still a `submit_expression` tool call.
+candidate families suggested by the image and function hints. For each family it
+enumerates or samples parameter guesses, substitutes the provided reference
+points, and checks the maximum absolute error. If every candidate in the current
+family is still above `--accept-max-abs-error`, the assistant target explicitly
+switches to another family. It stops only when a family has a tiny
+reference-point error, then emits the final `submit_expression` tool call.
+
+This creates training traces for cases like `sin(3*x)` versus `sin(2*x)`,
+`cos(4*x)` versus `cos(3*x)`, or `exp(-1*x**2)` versus
+`exp(-0.5*x**2)`, while also teaching the model to abandon an entire wrong
+family instead of only tweaking parameters inside it.
 
 Use `scripts/generate_stage5_reasoning_data.sh` for the current hard-negative
 recipe. It focuses families where adjacent frequencies, Gaussian widths, phases,

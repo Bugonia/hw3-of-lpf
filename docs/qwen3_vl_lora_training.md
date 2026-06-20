@@ -229,11 +229,13 @@ CUDA_VISIBLE_DEVICES=0 python eval.py \
 
 ## 11. Stage-5 Point-Check Reasoning Continuation
 
-After the repair run, the remaining errors are often near-miss parameters such
-as adjacent sine/cosine frequencies, Gaussian widths, and coefficients. Stage 5
-changes the SFT target style: the assistant first proposes visually plausible
-candidate expressions, substitutes the provided reference points into each, and
-then submits the zero/lowest-error expression.
+After the repair run, the remaining errors are often near-miss parameters or
+wrong initial families: adjacent sine/cosine frequencies, Gaussian widths,
+coefficients, or a visually plausible family that cannot fit the reference
+points. Stage 5 changes the SFT target style: the assistant proposes several
+candidate families, tries parameter guesses inside each family, substitutes the
+provided reference points, switches families when all errors are too large, and
+submits only after the best candidate is below a small error threshold.
 
 Generate the hard-negative reasoning set:
 

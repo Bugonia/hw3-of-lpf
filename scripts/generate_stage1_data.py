@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import itertools
 import json
 import math
 import os
@@ -476,6 +477,73 @@ def nearby_param_values(values: list[float], current: float) -> list[float]:
     ]
 
 
+def format_params(params: dict[str, float]) -> str:
+    return ", ".join(f"{name}={fmt_num(value)}" for name, value in params.items())
+
+
+def template_uses_allowed_functions(template: Template, function_hints: list[str]) -> bool:
+    if not function_hints:
+        return True
+    return set(template.true_hints).issubset(set(function_hints))
+
+
+def iter_param_guesses(
+    template: Template,
+    rng: random.Random,
+    max_guesses: int,
+) -> list[dict[str, float]]:
+    names = list(template.param_choices)
+    value_lists = [template.param_choices[name] for name in names]
+    all_guesses = [
+        {name: float(value) for name, value in zip(names, values)}
+        for values in itertools.product(*value_lists)
+    ]
+    if max_guesses <= 0 or len(all_guesses) <= max_guesses:
+        return all_guesses
+
+    indices = list(range(len(all_guesses)))
+    rng.shuffle(indices)
+    selected = sorted(indices[:max_guesses])
+    return [all_guesses[idx] for idx in selected]
+
+
+def build_family_parameter_candidates(
+    template: Template,
+    data_points: list[list[float]],
+    rng: random.Random,
+    max_param_guesses: int,
+    limit: int,
+) -> list[dict]:
+    candidates = []
+    for params in iter_param_guesses(template, rng, max_param_guesses):
+        expr = template.expression_builder(params)
+        error = candidate_point_error(expr, data_points)
+        if not math.isfinite(error):
+            continue
+        candidates.append(
+            {
+                "template_id": template.template_id,
+                "expression": expr,
+                "params": params,
+                "max_abs_error": error,
+            }
+        )
+
+    rng.shuffle(candidates)
+    candidates.sort(key=lambda item: item["max_abs_error"])
+
+    selected = []
+    seen = set()
+    for candidate in candidates:
+        if candidate["expression"] in seen:
+            continue
+        selected.append(candidate)
+        seen.add(candidate["expression"])
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def build_hard_negative_candidates(
     template: Template,
     params: dict[str, float],
@@ -504,6 +572,7 @@ def build_hard_negative_candidates(
                     "changed_param": name,
                     "from": float(params[name]),
                     "to": float(alt_value),
+                    "params": {key: float(value) for key, value in alt_params.items()},
                     "max_abs_error": error,
                 }
             )
@@ -557,7 +626,118 @@ FAMILY_DESCRIPTIONS = {
 }
 
 
+def build_candidate_family_rounds(
+    all_templates: list[Template],
+    true_template: Template,
+    true_params: dict[str, float],
+    true_expr: str,
+    function_hints: list[str],
+    data_points: list[list[float]],
+    rng: random.Random,
+    num_candidate_families: int,
+    num_hard_negatives: int,
+    max_family_param_guesses: int,
+    accept_max_abs_error: float,
+) -> list[dict]:
+    if num_candidate_families < 1:
+        num_candidate_families = 1
+
+    wrong_options = []
+    fallback_options = []
+    for candidate_template in all_templates:
+        if candidate_template.template_id == true_template.template_id:
+            continue
+        candidates = build_family_parameter_candidates(
+            template=candidate_template,
+            data_points=data_points,
+            rng=rng,
+            max_param_guesses=max_family_param_guesses,
+            limit=max(2, num_hard_negatives),
+        )
+        if not candidates:
+            continue
+        option = {
+            "template": candidate_template,
+            "candidates": candidates,
+            "best_error": candidates[0]["max_abs_error"],
+        }
+        if template_uses_allowed_functions(candidate_template, function_hints):
+            wrong_options.append(option)
+        else:
+            fallback_options.append(option)
+
+    # Prefer families that obey the prompt hints and can partially fit the
+    # reference points, but avoid accepting an equivalent wrong-family expression
+    # before the ground-truth family appears.
+    def option_key(option: dict) -> tuple[float, float]:
+        template = option["template"]
+        return (option["best_error"], abs(template.difficulty - true_template.difficulty))
+
+    wrong_options = [
+        option for option in wrong_options if option["best_error"] > accept_max_abs_error
+    ]
+    wrong_options.sort(key=option_key)
+    fallback_options = [
+        option for option in fallback_options if option["best_error"] > accept_max_abs_error
+    ]
+    fallback_options.sort(key=option_key)
+
+    selected_options = wrong_options[: max(0, num_candidate_families - 1)]
+    if len(selected_options) < num_candidate_families - 1:
+        needed = num_candidate_families - 1 - len(selected_options)
+        selected_options.extend(fallback_options[:needed])
+
+    rounds = []
+    for option in selected_options:
+        candidate_template = option["template"]
+        rounds.append(
+            {
+                "template_id": candidate_template.template_id,
+                "family_description": FAMILY_DESCRIPTIONS.get(
+                    candidate_template.template_id,
+                    "a function family consistent with the visible curve",
+                ),
+                "candidates": option["candidates"],
+                "best_error": option["best_error"],
+                "accepted": option["best_error"] <= accept_max_abs_error,
+            }
+        )
+
+    hard_negatives = build_hard_negative_candidates(
+        template=true_template,
+        params=true_params,
+        true_expr=true_expr,
+        data_points=data_points,
+        rng=rng,
+        limit=num_hard_negatives,
+    )
+    true_candidate = {
+        "template_id": true_template.template_id,
+        "expression": true_expr,
+        "changed_param": None,
+        "from": None,
+        "to": None,
+        "params": {key: float(value) for key, value in true_params.items()},
+        "max_abs_error": candidate_point_error(true_expr, data_points),
+    }
+    true_candidates = [true_candidate] + hard_negatives
+    rounds.append(
+        {
+            "template_id": true_template.template_id,
+            "family_description": FAMILY_DESCRIPTIONS.get(
+                true_template.template_id,
+                "the function family consistent with the visible curve",
+            ),
+            "candidates": true_candidates,
+            "best_error": true_candidate["max_abs_error"],
+            "accepted": true_candidate["max_abs_error"] <= accept_max_abs_error,
+        }
+    )
+    return rounds
+
+
 def build_point_check_answer(
+    all_templates: list[Template],
     template: Template,
     params: dict[str, float],
     true_expr: str,
@@ -565,46 +745,58 @@ def build_point_check_answer(
     data_points: list[list[float]],
     rng: random.Random,
     num_hard_negatives: int,
+    num_candidate_families: int,
+    max_family_param_guesses: int,
+    accept_max_abs_error: float,
 ) -> tuple[str, list[dict]]:
-    hard_negatives = build_hard_negative_candidates(
-        template=template,
-        params=params,
+    family_rounds = build_candidate_family_rounds(
+        all_templates=all_templates,
+        true_template=template,
+        true_params=params,
         true_expr=true_expr,
+        function_hints=function_hints,
         data_points=data_points,
         rng=rng,
-        limit=num_hard_negatives,
-    )
-    true_candidate = {
-        "expression": true_expr,
-        "changed_param": None,
-        "from": None,
-        "to": None,
-        "max_abs_error": candidate_point_error(true_expr, data_points),
-    }
-    candidates = [true_candidate] + hard_negatives
-
-    family = FAMILY_DESCRIPTIONS.get(
-        template.template_id,
-        "a function family consistent with the visible curve and available functions",
+        num_candidate_families=num_candidate_families,
+        num_hard_negatives=num_hard_negatives,
+        max_family_param_guesses=max_family_param_guesses,
+        accept_max_abs_error=accept_max_abs_error,
     )
     hint_text = ", ".join(function_hints) if function_hints else "polynomial terms"
+    threshold_text = format_point_error(accept_max_abs_error)
 
     lines = [
         "<think>",
-        f"The image and hints ({hint_text}) suggest {family}.",
-        "I form a few visually plausible candidate expressions and test them on the reference points:",
+        f"The image and hints ({hint_text}) suggest several possible families, so I will test them in order.",
+        f"Stopping rule: keep changing families while every candidate has max_abs_error above {threshold_text}.",
     ]
-    for idx, candidate in enumerate(candidates, start=1):
-        change = ""
-        if candidate["changed_param"] is not None:
-            change = (
-                f" [{candidate['changed_param']}: "
-                f"{fmt_num(candidate['from'])}->{fmt_num(candidate['to'])}]"
-            )
+    accepted_round = None
+    for round_idx, family_round in enumerate(family_rounds, start=1):
         lines.append(
-            f"{idx}. {candidate['expression']}{change}; "
-            f"max_abs_error={format_point_error(candidate['max_abs_error'])}."
+            f"Family {round_idx}: {family_round['family_description']} "
+            f"({family_round['template_id']})."
         )
+        for candidate_idx, candidate in enumerate(family_round["candidates"], start=1):
+            change = ""
+            if candidate.get("changed_param") is not None:
+                change = (
+                    f" [{candidate['changed_param']}: "
+                    f"{fmt_num(candidate['from'])}->{fmt_num(candidate['to'])}]"
+                )
+            lines.append(
+                f"  guess {candidate_idx}: params({format_params(candidate['params'])}) -> "
+                f"{candidate['expression']}{change}; "
+                f"max_abs_error={format_point_error(candidate['max_abs_error'])}."
+            )
+        if family_round["best_error"] <= accept_max_abs_error:
+            lines.append("  This family has a tiny reference-point error, so I stop searching.")
+            accepted_round = family_round
+            break
+        lines.append("  All guesses in this family are still too far off, so I switch families.")
+
+    if accepted_round is None:
+        accepted_round = family_rounds[-1]
+
     lines.extend(
         [
             f"The expression with the smallest point error is {true_expr}, so I submit it.",
@@ -612,11 +804,12 @@ def build_point_check_answer(
             build_tool_call(true_expr),
         ]
     )
-    return "\n".join(lines), candidates
+    return "\n".join(lines), family_rounds
 
 
 def build_assistant_answer(
     assistant_style: str,
+    all_templates: list[Template],
     template: Template,
     params: dict[str, float],
     true_expr: str,
@@ -624,11 +817,15 @@ def build_assistant_answer(
     data_points: list[list[float]],
     rng: random.Random,
     num_hard_negatives: int,
+    num_candidate_families: int,
+    max_family_param_guesses: int,
+    accept_max_abs_error: float,
 ) -> tuple[str, list[dict]]:
     if assistant_style == "tool_only":
         return build_tool_call(true_expr), []
     if assistant_style == "point_check":
         return build_point_check_answer(
+            all_templates=all_templates,
             template=template,
             params=params,
             true_expr=true_expr,
@@ -636,6 +833,9 @@ def build_assistant_answer(
             data_points=data_points,
             rng=rng,
             num_hard_negatives=num_hard_negatives,
+            num_candidate_families=num_candidate_families,
+            max_family_param_guesses=max_family_param_guesses,
+            accept_max_abs_error=accept_max_abs_error,
         )
     raise ValueError(f"unknown assistant style: {assistant_style}")
 
@@ -716,6 +916,7 @@ def build_template_schedule(
 
 
 def make_sample(
+    all_templates: list[Template],
     template: Template,
     sample_index: int,
     seed: int,
@@ -726,6 +927,9 @@ def make_sample(
     n_test_points: int,
     assistant_style: str,
     num_hard_negatives: int,
+    num_candidate_families: int,
+    max_family_param_guesses: int,
+    accept_max_abs_error: float,
 ) -> tuple[dict, dict]:
     params = {name: rng.choice(values) for name, values in template.param_choices.items()}
     expr = template.expression_builder(params)
@@ -743,6 +947,7 @@ def make_sample(
     prompt = build_prompt(function_hints, data_points)
     assistant_answer, candidate_checks = build_assistant_answer(
         assistant_style=assistant_style,
+        all_templates=all_templates,
         template=template,
         params=params,
         true_expr=expr,
@@ -750,6 +955,9 @@ def make_sample(
         data_points=data_points,
         rng=rng,
         num_hard_negatives=num_hard_negatives,
+        num_candidate_families=num_candidate_families,
+        max_family_param_guesses=max_family_param_guesses,
+        accept_max_abs_error=accept_max_abs_error,
     )
     expression_str = expr.replace("np.", "")
 
@@ -786,6 +994,9 @@ def make_sample(
             "distractor_funcs": [f for f in function_hints if f not in true_hints],
             "full_function_domain": [float(x_range[0]), float(x_range[1])],
             "assistant_style": assistant_style,
+            "num_candidate_families": num_candidate_families,
+            "max_family_param_guesses": max_family_param_guesses,
+            "accept_max_abs_error": accept_max_abs_error,
             "candidate_checks": candidate_checks,
         },
     }
@@ -797,6 +1008,8 @@ def make_sample(
         "difficulty_name": template.difficulty_name,
         "expression_numpy": expr,
         "assistant_style": assistant_style,
+        "num_candidate_families": num_candidate_families,
+        "accept_max_abs_error": accept_max_abs_error,
         "candidate_checks": candidate_checks,
         "messages": [
             {
@@ -913,6 +1126,24 @@ def parse_args() -> argparse.Namespace:
         help="Number of nearby wrong parameter candidates in point_check targets.",
     )
     parser.add_argument(
+        "--num-candidate-families",
+        type=int,
+        default=3,
+        help="Number of candidate family rounds in point_check targets, including the accepted family.",
+    )
+    parser.add_argument(
+        "--max-family-param-guesses",
+        type=int,
+        default=512,
+        help="Maximum parameter guesses to score per candidate family.",
+    )
+    parser.add_argument(
+        "--accept-max-abs-error",
+        type=float,
+        default=1e-4,
+        help="Reference-point max absolute error threshold for accepting a candidate family.",
+    )
+    parser.add_argument(
         "--templates",
         type=str,
         default="",
@@ -936,6 +1167,12 @@ def main() -> None:
         raise SystemExit("--val-ratio must be in [0, 1)")
     if args.num_hard_negatives < 0:
         raise SystemExit("--num-hard-negatives must be non-negative")
+    if args.num_candidate_families < 1:
+        raise SystemExit("--num-candidate-families must be positive")
+    if args.max_family_param_guesses < 1:
+        raise SystemExit("--max-family-param-guesses must be positive")
+    if args.accept_max_abs_error <= 0:
+        raise SystemExit("--accept-max-abs-error must be positive")
     try:
         template_sample_counts = parse_template_sample_counts(args.template_samples)
     except ValueError as exc:
@@ -963,6 +1200,7 @@ def main() -> None:
     sft_rows: list[dict] = []
     for i, template in enumerate(schedule):
         task_sample, sft_sample = make_sample(
+            all_templates=templates,
             template=template,
             sample_index=i,
             seed=args.seed,
@@ -973,6 +1211,9 @@ def main() -> None:
             n_test_points=args.n_test_points,
             assistant_style=args.assistant_style,
             num_hard_negatives=args.num_hard_negatives,
+            num_candidate_families=args.num_candidate_families,
+            max_family_param_guesses=args.max_family_param_guesses,
+            accept_max_abs_error=args.accept_max_abs_error,
         )
         task_rows.append(task_sample)
         sft_rows.append(sft_sample)
@@ -1004,6 +1245,9 @@ def main() -> None:
         "val_ratio": args.val_ratio,
         "assistant_style": args.assistant_style,
         "num_hard_negatives": args.num_hard_negatives,
+        "num_candidate_families": args.num_candidate_families,
+        "max_family_param_guesses": args.max_family_param_guesses,
+        "accept_max_abs_error": args.accept_max_abs_error,
         "template_samples_arg": args.template_samples,
         "num_templates": len(template_counts),
         "templates": sorted(template_counts),

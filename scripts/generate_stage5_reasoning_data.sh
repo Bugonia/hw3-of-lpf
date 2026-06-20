@@ -74,6 +74,9 @@ python3 scripts/generate_stage1_data.py \
   --val-ratio "${VAL_RATIO:-0.04}" \
   --assistant-style point_check \
   --num-hard-negatives "${NUM_HARD_NEGATIVES:-4}" \
+  --num-candidate-families "${NUM_CANDIDATE_FAMILIES:-3}" \
+  --max-family-param-guesses "${MAX_FAMILY_PARAM_GUESSES:-512}" \
+  --accept-max-abs-error "${ACCEPT_MAX_ABS_ERROR:-1e-4}" \
   --overwrite
 
 du -sh "$OUT_DIR"
