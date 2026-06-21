@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 import torch
@@ -29,6 +30,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--max-shard-size", default="4GB")
     parser.add_argument("--attn-implementation", default="auto", choices=["flash_attention_2", "sdpa", "eager", "auto"])
+    parser.add_argument(
+        "--prompt-file",
+        type=Path,
+        default=None,
+        help=(
+            "Prompt template copied to output_dir/prompt.txt for eval.py. "
+            "Defaults to adapter/prompt.txt when present, then repo prompt_example.txt."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -78,6 +88,15 @@ def main() -> None:
 
     processor = AutoProcessor.from_pretrained(args.base_model, trust_remote_code=True)
     processor.save_pretrained(output_dir)
+
+    repo_prompt = Path(__file__).resolve().parents[1] / "prompt_example.txt"
+    adapter_prompt = Path(args.adapter) / "prompt.txt"
+    prompt_file = args.prompt_file or (adapter_prompt if adapter_prompt.exists() else repo_prompt)
+    if prompt_file.exists():
+        shutil.copyfile(prompt_file, output_dir / "prompt.txt")
+        print(f"Copied prompt template from {prompt_file} to {output_dir / 'prompt.txt'}")
+    else:
+        print("No prompt template copied; eval.py will use its built-in default prompt.")
     print(f"Merged model saved to {output_dir}")
 
 
