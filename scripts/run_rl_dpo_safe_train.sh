@@ -14,11 +14,11 @@ export PREF_JSONL="${PREF_JSONL:-${OUT_DIR}/data/preferences.jsonl}"
 export MAX_PREF_SAMPLES="${MAX_PREF_SAMPLES:-2000}"
 export REJECTION_MODE="${REJECTION_MODE:-hardest}"
 
-# Safer optimization defaults. Batch size can stay at 1 for memory; the
-# effective batch is controlled by accumulation.
+# Safer optimization defaults for a single 140G GPU. Effective batch remains
+# 4 * 8 * 1 = 32, but larger micro-batches reduce accumulation overhead.
 export MAX_STEPS="${MAX_STEPS:-30}"
-export PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-1}"
-export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-32}"
+export PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-4}"
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 export LEARNING_RATE="${LEARNING_RATE:-5e-7}"
 export DPO_BETA="${DPO_BETA:-0.03}"
 export SFT_LOSS_COEF="${SFT_LOSS_COEF:-0.03}"

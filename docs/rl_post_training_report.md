@@ -301,17 +301,19 @@ Safe defaults:
 MAX_PREF_SAMPLES=2000
 REJECTION_MODE=hardest
 MAX_STEPS=30
-PER_DEVICE_TRAIN_BATCH_SIZE=1
-GRADIENT_ACCUMULATION_STEPS=32
+PER_DEVICE_TRAIN_BATCH_SIZE=4
+GRADIENT_ACCUMULATION_STEPS=8
 LEARNING_RATE=5e-7
 DPO_BETA=0.03
 SFT_LOSS_COEF=0.03
 WARMUP_RATIO=0.1
 ```
 
-`PER_DEVICE_TRAIN_BATCH_SIZE=1` is not by itself the issue; with
-`GRADIENT_ACCUMULATION_STEPS=32`, the effective batch is 32. Increase
-`PER_DEVICE_TRAIN_BATCH_SIZE` to 2 only if memory is clearly available.
+On the 140G single-GPU machine, `PER_DEVICE_TRAIN_BATCH_SIZE=4` with
+`GRADIENT_ACCUMULATION_STEPS=8` gives effective batch 32 while reducing
+accumulation overhead. If memory is still clearly below capacity, try
+`PER_DEVICE_TRAIN_BATCH_SIZE=8` and `GRADIENT_ACCUMULATION_STEPS=4`, keeping
+the effective batch unchanged.
 
 Full one-epoch run over the generated preference data:
 
