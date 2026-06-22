@@ -191,7 +191,180 @@ outputs/rl_cpu_smoke/eval/eval_predictions.jsonl
 
 ## GPU Migration
 
-On GPU, replace the synthetic candidate list with sampled Qwen outputs:
+The repo now includes a real GPU DPO/RL training path. It is not the CPU smoke
+candidate-policy test. It loads Qwen3-VL, starts from the current-best LoRA
+adapter, trains on verifier-built chosen/rejected preference data, then can
+merge and evaluate the resulting adapter.
+
+### Offline Environment
+
+On the GPU machine, use the project-local activation wrapper:
+
+```bash
+cd /inspire/hdd/project/generative-large-model/public/ywy/hw3-of-lpf
+source envs/rl_gpu/activate.sh
+```
+
+This activates the shared offline environment:
+
+```text
+/inspire/hdd/project/generative-large-model/public/envs/hw3
+```
+
+and sets offline/cache flags such as `HF_HUB_OFFLINE=1`,
+`TRANSFORMERS_OFFLINE=1`, `PIP_NO_INDEX=1`, and audio-disable flags needed for
+fast PEFT import.
+
+Expected package versions in the verified environment:
+
+```text
+torch: 2.11.0
+transformers: 5.13.0.dev0
+peft: 0.19.1
+accelerate: 1.14.0
+numpy: 2.4.6
+pillow: 12.2.0
+vllm: 0.23.0
+bitsandbytes: 0.49.2
+```
+
+### Preflight On A Fresh Shared Machine
+
+Run this before starting a long GPU job:
+
+```bash
+source envs/rl_gpu/activate.sh
+bash scripts/preflight_rl_gpu.sh
+```
+
+Verified output on this machine:
+
+```text
+Activated offline RL env: /inspire/hdd/project/generative-large-model/public/envs/hw3
+torch: 2.11.0
+transformers: 5.13.0.dev0
+peft: 0.19.1
+accelerate: 1.14.0
+numpy: 2.4.6
+pillow: 12.2.0
+num_rows: 4
+dry run ok
+RL GPU preflight passed.
+```
+
+What this proves:
+
+- the shared env is present and importable offline;
+- the base model, best adapter, synthetic SFT data, and images are present;
+- DPO preference JSONL can be generated;
+- Qwen3-VL `AutoProcessor.apply_chat_template` can encode image+text
+  chosen/rejected batches;
+- the DPO trainer entrypoint can start through batch construction.
+
+### Real GPU DPO/RL Training
+
+Default paths:
+
+```text
+base model:
+  /inspire/hdd/project/generative-large-model/public/models/Qwen3-VL-8B-Instruct
+starting adapter:
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf-best/qwen3_vl_v4_targeted_20260621/adapter
+training samples:
+  /inspire/hdd/project/generative-large-model/public/hw3-of-lpf/data/sft_v2/samples_train.jsonl
+output:
+  outputs/rl_dpo/
+```
+
+Start a conservative first GPU run:
+
+```bash
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+MAX_PREF_SAMPLES=1000 \
+MAX_STEPS=100 \
+PER_DEVICE_TRAIN_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=8 \
+LEARNING_RATE=5e-6 \
+DPO_BETA=0.1 \
+bash scripts/run_rl_dpo_train.sh
+```
+
+Full one-epoch run over the generated preference data:
+
+```bash
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+NUM_TRAIN_EPOCHS=1 \
+PER_DEVICE_TRAIN_BATCH_SIZE=1 \
+GRADIENT_ACCUMULATION_STEPS=8 \
+LEARNING_RATE=5e-6 \
+DPO_BETA=0.1 \
+bash scripts/run_rl_dpo_train.sh
+```
+
+The training wrapper does two things:
+
+1. `scripts/generate_dpo_preference_data.py`
+   - chosen response: verified ground-truth expression with short tool-call
+     answer;
+   - rejected response: current-best baseline mistake when available, or
+     verifier-scored numeric/generic hard negative;
+   - output: `outputs/rl_dpo/data/preferences.jsonl`.
+2. `scripts/train_qwen3_vl_dpo_lora.py`
+   - loads Qwen3-VL base model;
+   - loads current-best LoRA as trainable adapter;
+   - computes chosen/rejected assistant log-probabilities;
+   - optimizes `-logsigmoid(beta * (logp_chosen - logp_rejected))`;
+   - saves adapter to `outputs/rl_dpo/qwen3_vl_dpo_lora`.
+
+This is reference-free DPO-style preference optimization. It avoids a second
+8B reference model so it can start on a single GPU. The current-best adapter is
+the initialization, and the verifier creates the preference signal.
+
+### Merge And Evaluate
+
+After training:
+
+```bash
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+ADAPTER_DIR=outputs/rl_dpo/qwen3_vl_dpo_lora \
+MERGED_DIR=outputs/rl_dpo/qwen3_vl_dpo_merged \
+bash scripts/run_rl_dpo_eval.sh
+```
+
+This runs:
+
+- `scripts/merge_qwen3_vl_lora.py`,
+- then official `eval.py --split dev --enforce-eager`.
+
+Outputs:
+
+```text
+outputs/rl_dpo/qwen3_vl_dpo_lora/
+outputs/rl_dpo/qwen3_vl_dpo_merged/
+eval_outputs/qwen3_vl_dpo_merged/eval_results_dev.jsonl
+eval_outputs/qwen3_vl_dpo_merged/eval_summary_dev.json
+```
+
+Compare against current best:
+
+```text
+current best dev acc@0.99 = 0.6800
+```
+
+If the RL/DPO eval drops significantly, do not submit it. Lower the learning
+rate, reduce steps, add more rehearsal/easy rows, or switch to smaller targeted
+template subsets.
+
+### Later GRPO Variant
+
+For a true online GRPO stage, replace the generated rejected candidates with
+sampled Qwen outputs:
 
 1. Keep the verifier functions in `scripts/rl_expr_utils.py`.
 2. For each prompt, sample `K=8-32` responses from current best model.
