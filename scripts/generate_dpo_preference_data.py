@@ -109,6 +109,7 @@ def convert_sample(
     data_root: Path,
     baseline_predictions: dict[str, str],
     short_reasoning: bool,
+    rejection_mode: str,
 ) -> dict[str, Any] | None:
     true_expr = sample["expression_numpy"]
     true_metrics = compute_metrics(true_expr, sample.get("test_points", []), max_points=50)
@@ -119,7 +120,12 @@ def convert_sample(
     rejected_candidates = [item for item in rejected_candidates if item["reward"] < shaped_reward(true_metrics)]
     if not rejected_candidates:
         return None
-    rejected = rejected_candidates[0]
+    if rejection_mode == "worst":
+        rejected = rejected_candidates[0]
+    elif rejection_mode == "hardest":
+        rejected = rejected_candidates[-1]
+    else:
+        raise ValueError(f"unknown rejection_mode: {rejection_mode}")
 
     image_path = sample.get("image_path", "")
     if image_path and not str(image_path).startswith(("/", "http://", "https://", "file://")):
@@ -163,6 +169,12 @@ def main() -> None:
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=20260622)
     parser.add_argument("--short-reasoning", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--rejection-mode",
+        choices=["hardest", "worst"],
+        default="hardest",
+        help="Use hardest valid negative by default. 'worst' is only for debugging and can over-train.",
+    )
     args = parser.parse_args()
 
     data_root = args.data_root or args.samples.parent
@@ -175,7 +187,7 @@ def main() -> None:
     baseline_predictions = load_baseline_predictions(args.baseline_results)
     rows = []
     for sample in samples:
-        row = convert_sample(sample, data_root, baseline_predictions, args.short_reasoning)
+        row = convert_sample(sample, data_root, baseline_predictions, args.short_reasoning, args.rejection_mode)
         if row is not None:
             rows.append(row)
 
@@ -190,6 +202,7 @@ def main() -> None:
         "num_rows": len(rows),
         "seed": args.seed,
         "short_reasoning": args.short_reasoning,
+        "rejection_mode": args.rejection_mode,
         "output": str(args.out),
     }
     args.out.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

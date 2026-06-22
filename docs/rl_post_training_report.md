@@ -281,15 +281,37 @@ Start a conservative first GPU run:
 ```bash
 source envs/rl_gpu/activate.sh
 
-CUDA_VISIBLE_DEVICES=0 \
-MAX_PREF_SAMPLES=1000 \
-MAX_STEPS=100 \
-PER_DEVICE_TRAIN_BATCH_SIZE=1 \
-GRADIENT_ACCUMULATION_STEPS=8 \
-LEARNING_RATE=5e-6 \
-DPO_BETA=0.1 \
-bash scripts/run_rl_dpo_train.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/run_rl_dpo_safe_train.sh
 ```
+
+This safe wrapper is the recommended entrypoint after the first aggressive
+100-step run regressed dev from 68.0% to 38.7%. The regression was likely caused
+by a combination of:
+
+- rejected samples being too easy (`generic` or obviously invalid alternatives),
+  so the DPO objective did not teach subtle parameter discrimination;
+- effective batch size only 8, which is noisy for preference optimization;
+- learning rate/beta/update count too strong for a model already at 68%;
+- all chosen samples being synthetic ground truth, which can pull the model away
+  from the current-best response distribution.
+
+Safe defaults:
+
+```text
+MAX_PREF_SAMPLES=2000
+REJECTION_MODE=hardest
+MAX_STEPS=30
+PER_DEVICE_TRAIN_BATCH_SIZE=1
+GRADIENT_ACCUMULATION_STEPS=32
+LEARNING_RATE=5e-7
+DPO_BETA=0.03
+SFT_LOSS_COEF=0.03
+WARMUP_RATIO=0.1
+```
+
+`PER_DEVICE_TRAIN_BATCH_SIZE=1` is not by itself the issue; with
+`GRADIENT_ACCUMULATION_STEPS=32`, the effective batch is 32. Increase
+`PER_DEVICE_TRAIN_BATCH_SIZE` to 2 only if memory is clearly available.
 
 Full one-epoch run over the generated preference data:
 

@@ -27,6 +27,7 @@ fi
 if [[ -n "$BASELINE_RESULTS" && -f "$BASELINE_RESULTS" ]]; then
   GEN_ARGS+=(--baseline-results "$BASELINE_RESULTS")
 fi
+GEN_ARGS+=(--rejection-mode "${REJECTION_MODE:-hardest}")
 
 python3 scripts/generate_dpo_preference_data.py "${GEN_ARGS[@]}"
 
@@ -43,6 +44,7 @@ python3 scripts/train_qwen3_vl_dpo_lora.py \
   --learning-rate "${LEARNING_RATE:-5e-6}" \
   --warmup-ratio "${WARMUP_RATIO:-0.03}" \
   --beta "${DPO_BETA:-0.1}" \
+  --sft-loss-coef "${SFT_LOSS_COEF:-0.0}" \
   --logging-steps "${LOGGING_STEPS:-10}" \
   --save-steps "${SAVE_STEPS:-200}" \
   --attn-implementation "${ATTN_IMPLEMENTATION:-sdpa}"

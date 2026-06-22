@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--beta", type=float, default=0.1)
+    parser.add_argument(
+        "--sft-loss-coef",
+        type=float,
+        default=0.0,
+        help="Optional chosen-response NLL anchor. Use small values such as 0.02-0.05.",
+    )
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--save-steps", type=int, default=200)
     parser.add_argument("--save-total-limit", type=int, default=2)
@@ -202,7 +208,11 @@ def load_model(args: argparse.Namespace):
     return model
 
 
-def sequence_logps(model: torch.nn.Module, batch: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
+def sequence_token_logps(
+    model: torch.nn.Module,
+    batch: dict[str, torch.Tensor],
+    prefix: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
     inputs = {
         key[len(prefix) + 1 :]: value
         for key, value in batch.items()
@@ -215,6 +225,11 @@ def sequence_logps(model: torch.nn.Module, batch: dict[str, torch.Tensor], prefi
     loss_mask = shifted_labels != -100
     safe_labels = shifted_labels.masked_fill(~loss_mask, 0)
     token_logps = torch.gather(F.log_softmax(logits, dim=-1), dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
+    return token_logps, loss_mask
+
+
+def sequence_logps(model: torch.nn.Module, batch: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
+    token_logps, loss_mask = sequence_token_logps(model, batch, prefix)
     return (token_logps * loss_mask).sum(dim=-1) / loss_mask.sum(dim=-1).clamp_min(1)
 
 
@@ -266,10 +281,13 @@ def main() -> None:
     for epoch in range(args.num_train_epochs):
         for batch_idx, batch in enumerate(loader):
             batch = move_batch(batch, device)
-            chosen_logps = sequence_logps(model, batch, "chosen")
+            chosen_token_logps, chosen_mask = sequence_token_logps(model, batch, "chosen")
+            chosen_logps = (chosen_token_logps * chosen_mask).sum(dim=-1) / chosen_mask.sum(dim=-1).clamp_min(1)
             rejected_logps = sequence_logps(model, batch, "rejected")
             logits = args.beta * (chosen_logps - rejected_logps)
-            loss = -F.logsigmoid(logits).mean()
+            dpo_loss = -F.logsigmoid(logits).mean()
+            sft_loss = -(chosen_token_logps * chosen_mask).sum() / chosen_mask.sum().clamp_min(1)
+            loss = dpo_loss + args.sft_loss_coef * sft_loss
             (loss / args.gradient_accumulation_steps).backward()
 
             if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
@@ -280,7 +298,17 @@ def main() -> None:
                 global_step += 1
                 if global_step % args.logging_steps == 0:
                     margin = float((chosen_logps - rejected_logps).mean().detach().cpu())
-                    print(json.dumps({"step": global_step, "loss": float(loss.detach().cpu()), "logp_margin": margin}))
+                    print(
+                        json.dumps(
+                            {
+                                "step": global_step,
+                                "loss": float(loss.detach().cpu()),
+                                "dpo_loss": float(dpo_loss.detach().cpu()),
+                                "sft_loss": float(sft_loss.detach().cpu()),
+                                "logp_margin": margin,
+                            }
+                        )
+                    )
                 if global_step % args.save_steps == 0:
                     save_adapter(model, processor, Path(args.output_dir) / f"checkpoint-{global_step}")
                 if global_step >= total_steps:
