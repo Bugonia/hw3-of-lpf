@@ -334,10 +334,34 @@ For longer training, use the guarded script. It trains in phases, evaluates
 after every phase, accepts a phase only if it improves dev `acc@0.99`, and stops
 if the score drops below the SFT baseline.
 
+Use the global-storage wrapper on machines where the project filesystem is full:
+
 ```bash
 source envs/rl_gpu/activate.sh
 
 CUDA_VISIBLE_DEVICES=0 \
+RUN_NAME=guarded_$(date +%Y%m%d_%H%M%S) \
+bash scripts/run_rl_dpo_global_guarded_train.sh
+```
+
+This stores all heavy artifacts under:
+
+```text
+/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/
+```
+
+including preference JSONL, phase adapters, merged models, eval logs, and eval
+summaries.
+
+Equivalent manual guarded command:
+
+```bash
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+RUN_DIR=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/manual_guarded \
+TMP_MERGE_ROOT=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/manual_guarded/merged_models \
+EVAL_OUTPUT_ROOT=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/manual_guarded/eval_outputs \
 PHASES=8 \
 PHASE_STEPS=10 \
 PER_DEVICE_TRAIN_BATCH_SIZE=8 \

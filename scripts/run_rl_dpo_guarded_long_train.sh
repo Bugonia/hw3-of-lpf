@@ -11,6 +11,7 @@ PUBLIC_ROOT="${PUBLIC_ROOT:-/inspire/hdd/project/generative-large-model/public}"
 START_ADAPTER="${START_ADAPTER:-${PUBLIC_ROOT}/hw3-of-lpf-best/qwen3_vl_v4_targeted_20260621/adapter}"
 RUN_DIR="${RUN_DIR:-outputs/rl_dpo_guarded}"
 TMP_MERGE_ROOT="${TMP_MERGE_ROOT:-/tmp}"
+EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-${RUN_DIR}/eval_outputs}"
 
 # Current best SFT checkpoint is 68.0 acc@0.99 on dev.
 BASELINE_ACC="${BASELINE_ACC:-0.68}"
@@ -74,9 +75,10 @@ for phase in $(seq 1 "$PHASES"); do
   ADAPTER_DIR="$adapter_out" \
   MERGED_DIR="$merged_dir" \
   LOG_DIR="${phase_dir}/eval_logs" \
+  EVAL_OUTPUT_ROOT="$EVAL_OUTPUT_ROOT" \
   bash scripts/run_rl_dpo_eval.sh
 
-  summary_path="eval_outputs/$(basename "$merged_dir")/eval_summary_dev.json"
+  summary_path="${EVAL_OUTPUT_ROOT}/$(basename "$merged_dir")/eval_summary_dev.json"
   if [[ ! -f "$summary_path" ]]; then
     echo "[ERROR] Eval summary not found: $summary_path" >&2
     exit 1

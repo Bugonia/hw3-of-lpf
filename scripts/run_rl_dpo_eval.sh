@@ -7,6 +7,7 @@ MODEL_DIR="${MODEL_DIR:-${PUBLIC_ROOT}/models/Qwen3-VL-8B-Instruct}"
 ADAPTER_DIR="${ADAPTER_DIR:-outputs/rl_dpo_safe/qwen3_vl_dpo_safe_lora}"
 MERGED_DIR="${MERGED_DIR:-outputs/rl_dpo_safe/qwen3_vl_dpo_safe_merged}"
 LOG_DIR="${LOG_DIR:-outputs/rl_dpo_eval_logs}"
+EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:-eval_outputs}"
 MIN_MERGE_FREE_GB="${MIN_MERGE_FREE_GB:-30}"
 SKIP_MERGE="${SKIP_MERGE:-0}"
 
@@ -19,6 +20,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Adapter: $ADAPTER_DIR"
 echo "[INFO] Merged model: $MERGED_DIR"
+echo "[INFO] Eval output root: $EVAL_OUTPUT_ROOT"
 
 if [[ ! -d "$ADAPTER_DIR" ]]; then
   echo "[ERROR] Adapter directory not found: $ADAPTER_DIR" >&2
@@ -60,7 +62,7 @@ else
     --output-dir "$MERGED_DIR"
 fi
 
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" python3 eval.py "$MERGED_DIR" \
+EVAL_OUTPUT_ROOT="$EVAL_OUTPUT_ROOT" CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" python3 eval.py "$MERGED_DIR" \
   --split "${SPLIT:-dev}" \
   --tp "${TP:-1}" \
   --enforce-eager

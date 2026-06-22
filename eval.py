@@ -19,6 +19,7 @@ Prompt override:
 import argparse
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -413,7 +414,8 @@ def main():
     
     suffix = f"_{args.split}" if args.split else ""
     script_dir = Path(__file__).parent
-    output_dir = script_dir / "eval_outputs" / model_path.name
+    output_root = Path(os.environ.get("EVAL_OUTPUT_ROOT", script_dir / "eval_outputs"))
+    output_dir = output_root / model_path.name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results_path = output_dir / f"eval_results{suffix}.jsonl"
