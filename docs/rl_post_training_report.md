@@ -315,6 +315,69 @@ accumulation overhead. If memory is still clearly below capacity, try
 `PER_DEVICE_TRAIN_BATCH_SIZE=8` and `GRADIENT_ACCUMULATION_STEPS=4`, keeping
 the effective batch unchanged.
 
+The first safe run reported by the GPU machine reached:
+
+```text
+acc@0.99 = 67.0%
+acc@0.95 = 67.7%
+acc@0.90 = 69.0%
+acc@0.80 = 72.0%
+median R2 = 1.0
+```
+
+This is not an improvement over the current-best SFT checkpoint
+(`acc@0.99 = 68.0%`). Do not simply train longer from that run.
+
+### Guarded Long Training
+
+For longer training, use the guarded script. It trains in phases, evaluates
+after every phase, accepts a phase only if it improves dev `acc@0.99`, and stops
+if the score drops below the SFT baseline.
+
+```bash
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+PHASES=8 \
+PHASE_STEPS=10 \
+PER_DEVICE_TRAIN_BATCH_SIZE=8 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+LEARNING_RATE=2e-7 \
+DPO_BETA=0.02 \
+SFT_LOSS_COEF=0.05 \
+bash scripts/run_rl_dpo_guarded_long_train.sh
+```
+
+Defaults:
+
+```text
+BASELINE_ACC=0.68
+MIN_KEEP_ACC=0.68
+MIN_IMPROVEMENT=0.001
+PHASES=8
+PHASE_STEPS=10
+MAX_PREF_SAMPLES=3000
+PER_DEVICE_TRAIN_BATCH_SIZE=8
+GRADIENT_ACCUMULATION_STEPS=4
+LEARNING_RATE=2e-7
+DPO_BETA=0.02
+SFT_LOSS_COEF=0.05
+REJECTION_MODE=hardest
+```
+
+Outputs:
+
+```text
+outputs/rl_dpo_guarded/phase_*/adapter/
+outputs/rl_dpo_guarded/phase_*/eval_logs/
+outputs/rl_dpo_guarded/guarded_status.jsonl
+eval_outputs/qwen3_vl_dpo_guarded_phase_*_merged/eval_summary_dev.json
+```
+
+Use the adapter from the last `"decision": "accept"` row in
+`outputs/rl_dpo_guarded/guarded_status.jsonl`. If every phase is rejected or the
+run stops early, keep the original current-best SFT checkpoint.
+
 Full one-epoch run over the generated preference data:
 
 ```bash
