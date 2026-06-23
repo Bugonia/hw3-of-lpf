@@ -137,3 +137,106 @@ bash scripts/merge_lora.sh
 核心技术路线见 `docs/technical_route.md`；完整命令说明见 `docs/clean_workflow.md`；新开对话的上下文提示词见 `docs/new_conversation_prompt.md`。
 
 当前主线不是把任务做成 29 类模板分类，而是训练模型形成稳定的符号回归流程：先用图像判断周期性、对称性、零点/极值、包络和趋势等粗结构，再生成多个候选函数族与参数，最后用 Reference points 做数值代入检验，误差足够小才提交 tool call。
+
+---
+
+## 11. RL / DPO 后训练启动方式
+
+当前推荐使用 guarded DPO 流程继续做 RL 后训练。该流程会把训练拆成多个短 phase，每个 phase 训练后自动 merge、dev eval，并只接受超过当前最好 `acc@0.99` 的 adapter；如果分数低于当前 SFT baseline，会自动停止，避免长时间训练把模型训坏。
+
+由于项目盘空间紧张，推荐使用 global storage wrapper。它会把 preference 数据、adapter checkpoint、merge 后完整模型、eval logs 和 eval summary 全部写到：
+
+```text
+/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/
+```
+
+### 一键启动推荐配置
+
+```bash
+cd /inspire/hdd/project/generative-large-model/public/ywy/hw3-of-lpf
+git pull origin rl
+
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+RUN_NAME=guarded_$(date +%Y%m%d_%H%M%S) \
+bash scripts/run_rl_dpo_global_guarded_train.sh
+```
+
+默认配置面向单张 140G GPU：
+
+```text
+PHASES=8
+PHASE_STEPS=10
+MAX_PREF_SAMPLES=3000
+PER_DEVICE_TRAIN_BATCH_SIZE=8
+GRADIENT_ACCUMULATION_STEPS=4
+LEARNING_RATE=2e-7
+DPO_BETA=0.02
+SFT_LOSS_COEF=0.05
+REJECTION_MODE=hardest
+```
+
+等价地，effective batch size 是 `8 x 4 = 32`。这里故意使用较小 learning rate、较小 DPO beta，并混入 SFT loss，目标是让 RL 稳定微调当前最好 SFT checkpoint，而不是快速偏离原模型。
+
+### 长时间训练配置
+
+如果前几轮 phase 稳定不掉点，可以增加 phase 数量：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+RUN_NAME=guarded_long_$(date +%Y%m%d_%H%M%S) \
+PHASES=20 \
+PHASE_STEPS=10 \
+MAX_PREF_SAMPLES=3000 \
+PER_DEVICE_TRAIN_BATCH_SIZE=8 \
+GRADIENT_ACCUMULATION_STEPS=4 \
+LEARNING_RATE=2e-7 \
+DPO_BETA=0.02 \
+SFT_LOSS_COEF=0.05 \
+bash scripts/run_rl_dpo_global_guarded_train.sh
+```
+
+不建议一开始直接把 `PHASE_STEPS` 或 `LEARNING_RATE` 开大。之前 `lr=5e-6, beta=0.1, 100 steps` 的 DPO 会导致 dev 明显掉点；当前策略是小步训练、频繁 eval、只保留提升的 phase。
+
+### 查看结果
+
+每次运行会生成一个独立 run 目录，例如：
+
+```text
+/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/guarded_20260623_120000/
+```
+
+重点文件：
+
+```text
+guarded_status.jsonl                    每个 phase 的分数与 accept/reject 决策
+phase_*/adapter/                        每个 phase 训练出的 LoRA adapter
+phase_*/eval_logs/                      merge 与 eval 日志
+merged_models/qwen3_vl_dpo_guarded_*    每个 phase 的 merge 后完整模型
+eval_outputs/*/eval_summary_dev.json    dev summary
+eval_outputs/*/eval_results_dev.jsonl   逐样本预测与 R²
+```
+
+实时看训练进度：
+
+```bash
+tail -f /inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/guarded_status.jsonl
+```
+
+### 手动评测某个 adapter
+
+如果需要单独评测某个 adapter，也把 merge 和 eval 输出放到 global storage：
+
+```bash
+cd /inspire/hdd/project/generative-large-model/public/ywy/hw3-of-lpf
+source envs/rl_gpu/activate.sh
+
+ADAPTER_DIR=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/phase_1/adapter \
+MERGED_DIR=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/manual_eval/merged_model \
+EVAL_OUTPUT_ROOT=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/manual_eval/eval_outputs \
+LOG_DIR=/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/manual_eval/logs \
+bash scripts/run_rl_dpo_eval.sh
+```
+
+当前最好 SFT dev 分数约为 `acc@0.99 = 68.0%`。RL phase 只有超过这个基线并被 guarded script 标记为 `accept`，才值得作为新的候选提交模型继续观察。
