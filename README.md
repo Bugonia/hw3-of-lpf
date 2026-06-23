@@ -152,6 +152,28 @@ bash scripts/merge_lora.sh
 
 ### 一键启动推荐配置
 
+如果终端或 SSH 会话不稳定，优先用后台启动方式：
+
+```bash
+cd /inspire/hdd/project/generative-large-model/public/ywy/hw3-of-lpf
+git pull origin rl
+
+source envs/rl_gpu/activate.sh
+
+CUDA_VISIBLE_DEVICES=0 \
+RUN_NAME=guarded_$(date +%Y%m%d_%H%M%S) \
+bash scripts/run_rl_dpo_global_guarded_detached.sh
+```
+
+启动后按终端提示查看日志：
+
+```bash
+tail -f /inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/run_full.log
+tail -f /inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/guarded_status.jsonl
+```
+
+如果需要前台运行，使用：
+
 ```bash
 cd /inspire/hdd/project/generative-large-model/public/ywy/hw3-of-lpf
 git pull origin rl
@@ -161,6 +183,12 @@ source envs/rl_gpu/activate.sh
 CUDA_VISIBLE_DEVICES=0 \
 RUN_NAME=guarded_$(date +%Y%m%d_%H%M%S) \
 bash scripts/run_rl_dpo_global_guarded_train.sh
+```
+
+前台脚本同样会把完整 stdout/stderr 记录到：
+
+```text
+/inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/run_full.log
 ```
 
 默认配置面向单张 140G GPU：
