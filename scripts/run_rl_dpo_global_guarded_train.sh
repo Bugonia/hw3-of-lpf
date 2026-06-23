@@ -36,7 +36,11 @@ export TORCH_HOME="${CACHE_ROOT}/torch"
 export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
 export TORCHINDUCTOR_CACHE_DIR="${CACHE_ROOT}/torchinductor"
 export VLLM_CACHE_ROOT="${CACHE_ROOT}/vllm"
-export TMPDIR="${TMPDIR:-${GLOBAL_RUN_DIR}/tmp}"
+# vLLM/ZMQ creates IPC sockets under TMPDIR. Unix socket paths are limited
+# to about 107 bytes, so keep this path short even though checkpoints live
+# under GLOBAL_RUN_DIR.
+SAFE_RUN_NAME="$(printf '%s' "$RUN_NAME" | tr -c 'A-Za-z0-9_.-' '_')"
+export TMPDIR="${TMPDIR:-/tmp/hw3rl_${SAFE_RUN_NAME}_$$}"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 mkdir -p \
   "$LOG_DIR" \
@@ -75,6 +79,9 @@ on_exit() {
   du -sh "$GLOBAL_RUN_DIR" 2>/dev/null || true
   echo "[INFO] Filesystem status:"
   df -h "$GLOBAL_ROOT" "$PROJECT_ROOT" 2>/dev/null || df -h "$GLOBAL_ROOT" 2>/dev/null || true
+  if [[ "$TMPDIR" == /tmp/hw3rl_* ]]; then
+    rm -rf "$TMPDIR" 2>/dev/null || true
+  fi
 }
 trap on_exit EXIT
 

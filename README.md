@@ -191,6 +191,8 @@ bash scripts/run_rl_dpo_global_guarded_train.sh
 /inspire/hdd/global_user/yuwenye-253108120175/hw3_rl_runs/<RUN_NAME>/run_full.log
 ```
 
+注意：checkpoint、merge 模型、eval 输出和 cache 都会写到 global storage；`TMPDIR` 会使用较短的 `/tmp/hw3rl_*` 路径，因为 vLLM/ZMQ 的 IPC socket 路径长度不能超过约 107 字符。
+
 默认配置面向单张 140G GPU：
 
 ```text
